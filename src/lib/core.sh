@@ -51,7 +51,6 @@ Examples:
 EOF
 }
 
-
 # Initialize the global variables
 function init_global_variables () {
   # Command line parsing variables
@@ -61,7 +60,6 @@ function init_global_variables () {
   action=""
   batch=0
   live=0
-  should_exit=0
 
   # Cache for domain parameters to avoid redundant calls to the zfs command
   declare -A domain_params_cache=( )
@@ -69,6 +67,8 @@ function init_global_variables () {
 
 # Parses the command-line arguments.
 function parse_args () {
+  local should_exit=0
+
   # Try to get the action from the first positional argument
   if [ -n "${1:-}" ] && [[ ! "${1:-}" =~ ^- ]]; then
     action="${1:-}"
@@ -189,12 +189,12 @@ function domain_checks () {
   done
 
   zfs_dataset_snapshots=( $(get_zfs_snapshots_from_dataset "${zfs_dataset}") )
-  zfs_mountpoint=$(zfs get -H -o value mountpoint "${zfs_dataset}")
+  zfs_mountpoint=$(get_zfs_dataset_mountpoint "${zfs_dataset}")
 
   if [ -z "$zfs_mountpoint" ] || [[ ! "$zfs_mountpoint" =~ ^/ ]]; then
     error "$domain: Wrong ZFS mountpoint for dataset '$zfs_dataset': '$zfs_mountpoint'." ; error=1
-  elif [ ! -d "$zfs_mountpoint" ]; then
-    error "$domain: ZFS mountpoint '$zfs_mountpoint' does not exist." ; error=1
+#  elif [ ! -d "$zfs_mountpoint" ]; then
+#    error "$domain: ZFS mountpoint '$zfs_mountpoint' does not exist." ; error=1
   fi
 
   state=$(domain_state "$domain")
@@ -255,9 +255,18 @@ function domain_checks () {
   fi
 
   # Store those values in cache for later use
-  domain_params_cache["$domain"]=( "${state}" "${zfs_dataset}" "$zfs_mountpoint" "${zfs_zvols[*]}" )
+  declare -A domain_params_cache
+  domain_params_cache["$domain/state"]="${state}"
+  domain_params_cache["$domain/dataset"]="${zfs_dataset}"
+  domain_params_cache["$domain/mountpoint"]="${zfs_mountpoint}"
+  domain_params_cache["$domain/zvols"]="${zfs_zvols[*]}"
 
   return 0
+}
+
+function get_zfs_dataset_mountpoint () {
+  local zfs_dataset="$1"
+  zfs get -H -o value mountpoint "${zfs_dataset}"
 }
 
 # Gets the current state of the specified domain.
@@ -275,13 +284,13 @@ function get_zfs_datasets_from_domain () {
 # Gets the list of ZFS zvols used by the specified domain
 function get_zfs_zvols_from_domain () {
   local domain="$1"
-  virsh domblklist "$domain" --details | awk '$1 == "block" && $2 == "disk" && $4 ~ /^\/dev\/zvol\// { print gsub(/\/dev\/zvol\//, "", $4) }'
+  virsh domblklist "$domain" --details | awk '$1 == "block" && $2 == "disk" && $4 ~ /^\/dev\/zvol\// { gsub(/\/dev\/zvol\//, "", $4); print $4 }'
 }
 
 # Gets the list of ZFS snapshots for the specified dataset.
 function get_zfs_snapshots_from_dataset () {
   local dataset="$1"
-  zfs list -H -t snapshot -o name "$dataset" | awk -F'@' '{print $2}'
+  zfs list -H -t snapshot -o name "$dataset" | awk -F'@' '{print $2}' | sort | uniq
 }
 
 # Takes a live snapshot of the specified domain.
@@ -290,8 +299,8 @@ function take_live_snapshot () {
   local snapshot="$2"
 
   log_verbose "$domain: Taking live snapshot '$snapshot'..."
-  zfs_dataset="${domain_params_cache["$domain"][1]}"
-  zfs_mountpoint="${domain_params_cache["$domain"][2]}"
+  zfs_dataset="${domain_params_cache["$domain/dataset"]}"
+  zfs_mountpoint="${domain_params_cache["$domain/mountpoint"]}"
   virsh save "$domain" "${zfs_mountpoint}/domain.save" --running --verbose --image-format raw
   zfs snapshot -r "${zfs_dataset}@${snapshot}"
 }
@@ -302,8 +311,7 @@ function take_crash_consistent_snapshot () {
   local snapshot="$2"
 
   log_verbose "$domain: Taking crash-consistent snapshot '$snapshot'..."
-  zfs_dataset="${domain_params_cache["$domain"][1]}"
-  zfs_mountpoint="${domain_params_cache["$domain"][2]}"
+  zfs_dataset="${domain_params_cache["$domain/dataset"]}"
   zfs snapshot -r "${zfs_dataset}@${snapshot}"
 }
 
@@ -313,8 +321,7 @@ function revert_snapshot () {
   local snapshot="$2"
 
   log_verbose "$domain: Reverting snapshot '$snapshot'..."
-  zfs_dataset="${domain_params_cache["$domain"][1]}"
-  zfs_mountpoint="${domain_params_cache["$domain"][2]}"
+  zfs_dataset="${domain_params_cache["$domain/dataset"]}"
   zfs list -H -r -o name "$zfs_dataset" | while read dataset; do 
     zfs rollback -Rrf "$dataset@$snapshot"
   done
@@ -325,8 +332,8 @@ function restore_domain () {
   local domain="$1"
   
   log_verbose "$domain: Restoring live snapshot..."
-  zfs_dataset="${domain_params_cache["$domain"][1]}"
-  zfs_mountpoint="${domain_params_cache["$domain"][2]}"
+  zfs_dataset="${domain_params_cache["$domain/dataset"]}"
+  zfs_mountpoint="${domain_params_cache["$domain/mountpoint"]}"
   virsh_restore_opts=( )
   if [ "$batch" -eq 1 ]; then
     virsh_restore_opts+=( "--paused" )
@@ -338,9 +345,11 @@ function restore_domain () {
 
 # Pauses all domains in the list.
 function pause_all_domains () {
+  local domains=( "$@" )
+
   for domain in "${domains[@]}"; do
     log_verbose "$domain: Pausing domain..."
-    state="${domain_params_cache["$domain"][0]}"
+    state="${domain_params_cache["$domain/state"]}"
     if [ "$state" == "running" ]; then
       virsh suspend "$domain"
     fi
@@ -349,10 +358,12 @@ function pause_all_domains () {
 
 # Resumes all domains in the list.
 function resume_all_domains () {
+  local domains=( "$@" )
+
   for domain in "${domains[@]}"; do
     log_verbose "$domain: Resuming domain..."
-    state="${domain_params_cache["$domain"][0]}"
-    case "$(domain_state "$domain")" in
+    state="${domain_params_cache["$domain/state"]}"
+    case "$state" in
       paused)
         virsh resume "$domain" || true
         ;;
@@ -368,8 +379,10 @@ function resume_all_domains () {
 
 # Performs pre-flight checks for all specified domains according to the action.
 function preflight_checks () {
-  local action="$1"
+  local action="$1" ; shift
+  local snapshot_name="$1" ; shift
   local error=0
+  local domains=( "$@" )
 
   for domain in "${domains[@]}"; do
     log_verbose "$domain: Performing domain pre-flight checks for $action..."
@@ -384,12 +397,12 @@ function preflight_checks () {
 # Takes snapshots for all specified domains.
 function take_snapshots () {
   if [ "$batch" -eq 1 ]; then
-    pause_all_domains
+    pause_all_domains "${domains[@]}"
   fi
 
   for domain in "${domains[@]}"; do
-    state="${domain_params_cache["$domain"][0]}"
-    if [ "$live" -eq 1 ]; then
+    state="${domain_params_cache["$domain/state"]}"
+    if [ "$live" -eq 1 ] && [ "$state" == "running" ]; then
       take_live_snapshot "$domain" "$snapshot_name"
       restore_domain "$domain"
     else
@@ -398,10 +411,10 @@ function take_snapshots () {
   done
 
   if [ "$batch" -eq 1 ]; then
-    resume_all_domains
+    resume_all_domains "${domains[@]}"
   fi
 
-  return $error
+  return 0
 }
 
 # Reverts snapshots for all specified domains.
@@ -412,26 +425,25 @@ function revert_snapshots () {
   done
 
   if [ "$batch" -eq 1 ]; then
-    resume_all_domains
+    resume_all_domains "${domains[@]}"
   fi
 }
 
 # Lists snapshots for all specified domains.
 function list_snapshots () {
   local domains=( "$@" )
-  local zfs_dataset=""
-  local zfs_mountpoint=""
+  local zfs_datasets
+  local zfs_dataset
+  local domain
 
-  # TODO
-  #for domain in "${domains[@]}"; do
+  for domain in "${domains[@]}"; do
+    zfs_datasets=( $(get_zfs_datasets_from_domain "$domain") )
+    if [ ${#zfs_datasets[@]} -ne 1 ]; then
+      error "$domain: Wrong number of ZFS datasets (${#zfs_datasets[@]}) found." ; return 1
+    fi
+    zfs_dataset="${zfs_datasets[0]:-}"
 
-  zfs_datasets=( $(get_zfs_datasets_from_domain "$domain") )
-  if [ ${#zfs_datasets[@]} -ne 1 ]; then
-    error "$domain: Wrong number of ZFS datasets (${#zfs_datasets[@]}) found." ; return 1
-  fi
-  zfs_dataset="${zfs_datasets[0]:-}"
-  zfs_mountpoint=$(zfs get -H -o value mountpoint "${zfs_dataset}")
-
-  echo "Snapshots for domain '$domain':"
-  zfs list -H -t snapshot -o name "$zfs_dataset" | awk -F'@' '{print $2}'
+    echo "Snapshots for domain '$domain':"
+    get_zfs_snapshots_from_dataset "$zfs_dataset" | sed 's/^/  - /'
+  done
 }

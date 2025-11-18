@@ -1,6 +1,6 @@
 .PHONY: all test unit-test syntax-test integration-test lint clean
 
-all:
+all: syntax-test unit-test lint
 
 syntax-test:
 	@echo "Running syntax tests..."
@@ -9,7 +9,7 @@ syntax-test:
 
 unit-test:
 	@echo "Running unit tests..."
-	@bats test/unit
+	@LANG=LC_ALL=C BATS_LIB_PATH=$(PWD)/test/test_helper bats test/unit
 
 clean:
 lint:

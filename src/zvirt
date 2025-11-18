@@ -35,19 +35,19 @@ source "$script_dir/lib/core.sh"
 
 # Parse command line arguments and act accordingly
 init_global_variables
-if ! parse_args; then
+if ! parse_args "$@"; then
   echo
   show_help >&2
   exit 1
 fi
 
-preflight_checks "$action" || fatal "Pre-flight checks failed."
-
 case "$action" in
   snapshot)
+    preflight_checks "$action" "$snapshot_name" "${domains[@]}" || fatal "Pre-flight checks failed."
     take_snapshots || fatal "Failed to take snapshots."
     ;;
   revert)
+    preflight_checks "$action" "$snapshot_name" "${domains[@]}" || fatal "Pre-flight checks failed."
     revert_snapshots || fatal "Failed to revert snapshots."
     ;;
   list)
