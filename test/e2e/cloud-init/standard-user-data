@@ -1,0 +1,17 @@
+#cloud-config
+
+bootcmd:
+- setsebool -P virt_qemu_ga_run_unconfined on
+- setsebool -P virt_qemu_ga_read_nonsecurity_files on
+
+runcmd:
+- install -o root -g root -m 0777 -d /test/rootfs
+
+users:
+- name: e2e
+  gecos: End-to-End Test User
+  sudo: ALL=(ALL) NOPASSWD:ALL
+  groups: wheel
+  lock_passwd: false
+  # echo -n test | mkpasswd -m bcrypt -s
+  passwd: $2b$05$Oh13XsRSrGrL/iSvV0Rax.w7rQMx/6lyBTCuaEVXrdh/qiagci9bS

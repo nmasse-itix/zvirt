@@ -246,7 +246,7 @@ data/domains/baz/virtiofs"
   declare -A domain_params_cache=( ["foo/state"]="running" ["foo/dataset"]="data/domains/foo" ["foo/mountpoint"]="/var/lib/libvirt/images/foo" ["foo/zvols"]="" )
   virsh_mock="$(mock_create)"
   virsh() {
-    if [[ "$*" == "restore /var/lib/libvirt/images/foo/domain.save --verbose --paused" ]]; then
+    if [[ "$*" == "restore /var/lib/libvirt/images/foo/domain.save --paused" ]]; then
       $virsh_mock "$@"
       return $?
     fi
@@ -267,7 +267,7 @@ data/domains/baz/virtiofs"
   declare -A domain_params_cache=( ["foo/state"]="running" ["foo/dataset"]="data/domains/foo" ["foo/mountpoint"]="/var/lib/libvirt/images/foo" ["foo/zvols"]="" )
   virsh_mock="$(mock_create)"
   virsh() {
-    if [[ "$*" == "restore /var/lib/libvirt/images/foo/domain.save --verbose --running" ]]; then
+    if [[ "$*" == "restore /var/lib/libvirt/images/foo/domain.save --running" ]]; then
       $virsh_mock "$@"
       return $?
     fi
@@ -306,12 +306,18 @@ data/domains/baz/virtiofs"
 @test "resume_all_domains: nominal case" {
   # Mock the underlying tools
   local domains=( "foo" "bar" )
-  declare -A domain_params_cache=( ["foo/state"]="paused" ["bar/state"]="shut off" )
   virsh_mock="$(mock_create)"
   virsh() {
     if [[ "$*" == "resume foo" ]] || [[ "$*" == "start bar" ]]; then
       $virsh_mock "$@"
       return $?
+    fi
+    if [[ "$*" == "domstate foo" ]]; then
+      echo "paused"
+      return 0
+    elif [[ "$*" == "domstate bar" ]]; then
+      echo "shut off"
+      return 0
     fi
     return 1
   }
@@ -444,7 +450,8 @@ snapshot2"
   take_live_snapshot() { return 1; }
   restore_domain() { return 1; }
   resume_all_domains() { return 1; }
-  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains
+  remove_save_file() { return 1; }
+  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file
 
   declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
 
@@ -486,7 +493,14 @@ snapshot2"
     return 1
 
   }
-  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains
+  remove_save_file() {
+    regex="^(foo|bar) backup$"
+    if [[ "$*" =~ $regex ]]; then
+      return 0
+    fi
+    return 1
+  }
+  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file
 
   declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
 
@@ -526,7 +540,8 @@ snapshot2"
     return 1
   }
   resume_all_domains() { return 1; }
-  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains
+  remove_save_file() { return 1; }
+  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file
 
   declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
 

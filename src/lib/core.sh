@@ -62,7 +62,7 @@ function init_global_variables () {
   live=0
 
   # Cache for domain parameters to avoid redundant calls to the zfs command
-  declare -A domain_params_cache=( )
+  declare -gA domain_params_cache=( )
 }
 
 # Parses the command-line arguments.
@@ -255,7 +255,6 @@ function domain_checks () {
   fi
 
   # Store those values in cache for later use
-  declare -A domain_params_cache
   domain_params_cache["$domain/state"]="${state}"
   domain_params_cache["$domain/dataset"]="${zfs_dataset}"
   domain_params_cache["$domain/mountpoint"]="${zfs_mountpoint}"
@@ -340,7 +339,7 @@ function restore_domain () {
   else
     virsh_restore_opts+=( "--running" )
   fi
-  virsh restore "${zfs_mountpoint}/domain.save" --verbose "${virsh_restore_opts[@]}"
+  virsh restore "${zfs_mountpoint}/domain.save" "${virsh_restore_opts[@]}"
 }
 
 # Pauses all domains in the list.
@@ -362,7 +361,7 @@ function resume_all_domains () {
 
   for domain in "${domains[@]}"; do
     log_verbose "$domain: Resuming domain..."
-    state="${domain_params_cache["$domain/state"]}"
+    state="$(domain_state "$domain")"
     case "$state" in
       paused)
         virsh resume "$domain" || true
@@ -394,6 +393,15 @@ function preflight_checks () {
   return $error
 }
 
+function remove_save_file () {
+  local domain="$1"
+  zfs_mountpoint="${domain_params_cache["$domain/mountpoint"]}"
+  if [ -f "${zfs_mountpoint}/domain.save" ]; then
+    log_verbose "$domain: Removing save file '${zfs_mountpoint}/domain.save'..."
+    rm -f "${zfs_mountpoint}/domain.save"
+  fi
+}
+
 # Takes snapshots for all specified domains.
 function take_snapshots () {
   if [ "$batch" -eq 1 ]; then
@@ -405,6 +413,9 @@ function take_snapshots () {
     if [ "$live" -eq 1 ] && [ "$state" == "running" ]; then
       take_live_snapshot "$domain" "$snapshot_name"
       restore_domain "$domain"
+      if [ "$batch" -eq 1 ]; then
+        remove_save_file "$domain"
+      fi
     else
       take_crash_consistent_snapshot "$domain" "$snapshot_name"
     fi
