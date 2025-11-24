@@ -58,7 +58,7 @@ rpm: prerequisites
 
 release: prerequisites tarball srpm rpm
 	@echo "Creating GitHub release..."
-	@gh release create $(VERSION) build/zvirt-$(VERSION).tar.gz build/zvirt-$(VERSION)/RPMS/noarch/zvirt-$(VERSION)-*.rpm build/zvirt-$(VERSION)/SRPMS/zvirt-$(VERSION)-*.rpm --draft --title "zvirt $(VERSION)" --notes "Release $(VERSION) of zvirt."
+	@gh release create $(VERSION) build/zvirt-$(VERSION).tar.gz build/zvirt-$(VERSION)/RPMS/noarch/zvirt-$(VERSION)-*.rpm build/zvirt-$(VERSION)/SRPMS/zvirt-$(VERSION)-*.rpm --draft --title "v$(VERSION)" --notes "Release v$(VERSION) of zvirt."
 
 clean:
 	@echo "Cleaning up..."
