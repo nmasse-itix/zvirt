@@ -1,7 +1,7 @@
 PREFIX ?= /usr/local
-.PHONY: all test unit-test syntax-test e2e-test lint clean prerequisites install
+.PHONY: all test unit-test syntax-test e2e-test lint clean prerequisites install uninstall release tarball install-tarball
 
-all: syntax-test unit-test e2e-test lint install
+all: syntax-test lint unit-test e2e-test release
 
 syntax-test:
 	@echo "Running syntax tests..."
@@ -12,6 +12,8 @@ prerequisites:
 	@echo "Installing prerequisites..."
 	@/bin/bash -Eeuo pipefail -c 'if ! bats --version &>/dev/null; then dnf install -y bats; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! yq --version &>/dev/null; then dnf install -y yq; fi'
+	@/bin/bash -Eeuo pipefail -c 'if ! shellcheck --version &>/dev/null; then dnf install -y shellcheck; fi'
+	@/bin/bash -Eeuo pipefail -c 'if ! gh --version &>/dev/null; then dnf install -y gh; fi'
 
 unit-test: prerequisites
 	@echo "Running unit tests..."
@@ -32,15 +34,21 @@ uninstall:
 	@rm -f $(PREFIX)/bin/zvirt
 	@rm -rf $(PREFIX)/lib/zvirt
 
-release:
+tarball:
 	@echo "Creating release tarball..."
 	@set -Eeuo pipefail; VERSION=$$(git describe --tags --abbrev=0); tar --exclude-vcs --exclude='*.swp' -czf zvirt-$$VERSION.tar.gz --transform "s|^src|zvirt-$$VERSION|" src
 
-install-release:
+install-tarball: tarball
 	@echo "Installing zvirt from release tarball..."
 	@set -Eeuo pipefail; VERSION=$$(git describe --tags --abbrev=0); tar -xvzf zvirt-$$VERSION.tar.gz --strip-components=1 -C $(PREFIX)
 
+
+
+release: prerequisites tarball
+	@echo "Creating GitHub release..."
+	@set -Eeuo pipefail; VERSION=$$(git describe --tags --abbrev=0); gh release create $$VERSION zvirt-$$VERSION.tar.gz --draft --title "zvirt $$VERSION" --notes "Release $$VERSION of zvirt."
+
 clean:
-lint:
+lint: prerequisites
 	@echo "Linting..."
-	@shellcheck src/bin/zvirt src/lib/zvirt/*.sh
+	@cd src && shellcheck --severity=error bin/zvirt lib/zvirt/*.sh

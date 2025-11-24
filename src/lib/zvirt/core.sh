@@ -1,3 +1,9 @@
+#!/bin/bash
+
+##
+## zvirt core library - Provides functions for taking and reverting snapshots of libvirt domains using ZFS.
+##
+
 # Reports a verbose message to stdout if verbose mode is enabled.
 function log_verbose () {
   if [ "$verbose" -eq 1 ]; then
@@ -7,13 +13,13 @@ function log_verbose () {
 
 # Reports a fatal error message to stderr and exits with a non-zero exit code.
 function fatal () {
-    echo "Error: $@" 2>&1
+    echo "Error: $*" 2>&1
     exit 1
 }
 
 # Reports an error message to stderr.
 function error () {
-    echo "Error: $@" 2>&1
+    echo "Error: $*" 2>&1
 }
 
 function show_help () {
