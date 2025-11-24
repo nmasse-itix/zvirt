@@ -11,6 +11,13 @@ setup() {
     "${BATS_TEST_DIRNAME}/../../src/zvirt" "$@"
   }
 
+  declare -g e2e_test_enable_debug=0
+  e2e_test_debug_log(){
+    if [ "$e2e_test_enable_debug" -eq 1 ]; then
+      echo "$@" >&3
+    fi
+  }
+
   qemu_exec() {
     domain="$1"
     shift || true
@@ -23,17 +30,17 @@ setup() {
     done
     local command="{\"execute\": \"guest-exec\", \"arguments\": {\"path\": \"$1\", \"arg\": [ $json_args ], \"capture-output\": true }}"
     output="$(virsh qemu-agent-command "$domain" "$command")"
-    #echo "qemu_exec: command output: $output" >&3
+    #e2e_test_debug_log "qemu_exec: command output: $output"
     pid="$(echo "$output" | jq -r '.return.pid')"
     if [ -z "$pid" ] || [ "$pid" == "null" ]; then
-      echo "qemu_exec: failed to get pid from command output" >&3
+      e2e_test_debug_log "qemu_exec: failed to get pid from command output"
       return 1
     fi
     sleep .25
     while true; do
       local status_command="{\"execute\": \"guest-exec-status\", \"arguments\": {\"pid\": $pid}}"
       status_output="$(virsh qemu-agent-command "$domain" "$status_command")"
-      #echo "qemu_exec: status output: $status_output" >&3
+      #e2e_test_debug_log "qemu_exec: status output: $status_output"
       exited="$(echo "$status_output" | jq -r '.return.exited')"
       if [ "$exited" == "true" ]; then
         stdout_base64="$(echo "$status_output" | jq -r '.return["out-data"]')"
@@ -79,20 +86,31 @@ EOF
   }
 
   cleanup() {
-    echo "teardown: Cleaning up created domains and images..." >&3
+    e2e_test_debug_log "teardown: Cleaning up created domains and images..."
     for domain in standard with-fs with-zvol; do
-      if virsh dominfo "$domain" &>/dev/null; then
-        virsh destroy "$domain" || true
-        virsh undefine "$domain" --nvram || true
+      state="$(virsh domstate "$domain" 2>/dev/null || true)"
+      if [[ -n "$state" && "$state" != "shut off" ]]; then
+        virsh destroy "$domain"
       fi
-      zfs destroy -r data/domains/"$domain" || true
+      if virsh dominfo "$domain" &>/dev/null; then
+        virsh undefine "$domain" --nvram
+      fi
+    done
+    sleep 1
+    sync
+    sleep 1
+    for domain in standard with-fs with-zvol; do
+      if zfs list data/domains/"$domain" &>/dev/null; then
+        zfs destroy -rR data/domains/"$domain"
+      fi
+      sleep .2
       rm -rf "/var/lib/libvirt/images/${domain}"
     done
   }
 
   create_domains() {
     # Create the standard VM
-    echo "setup: Creating the standard VM..." >&3
+    e2e_test_debug_log "setup: Creating the standard VM..."
     mkdir -p /var/lib/libvirt/images/standard
     zfs create -p data/domains/standard -o mountpoint=/var/lib/libvirt/images/standard
     convert_cloud_image "$fedora_img" "/var/lib/libvirt/images/standard/root.img"
@@ -113,7 +131,7 @@ EOF
                   --boot=uefi
 
     # Create the with-fs VM
-    echo "setup: Creating the with-fs VM..." >&3
+    e2e_test_debug_log "setup: Creating the with-fs VM..."
     mkdir -p /var/lib/libvirt/images/with-fs /srv/with-fs
     chmod 0777 /srv/with-fs
     zfs create -p data/domains/with-fs -o mountpoint=/var/lib/libvirt/images/with-fs
@@ -138,7 +156,7 @@ EOF
                   --filesystem=type=mount,accessmode=passthrough,driver.type=virtiofs,driver.queue=1024,source.dir=/srv/with-fs,target.dir=data
 
     # Create the with-zvol VM
-    echo "setup: Creating the with-zvol VM..." >&3
+    e2e_test_debug_log "setup: Creating the with-zvol VM..."
     mkdir -p /var/lib/libvirt/images/with-zvol
     zfs create -p data/domains/with-zvol -o mountpoint=/var/lib/libvirt/images/with-zvol
     zfs create -V 10G data/domains/with-zvol/data
@@ -162,31 +180,39 @@ EOF
   }
 
   readiness_wait() {
-    echo "setup: Waiting for VMs to become ready..." >&3
+    e2e_test_debug_log "setup: Waiting for VMs to become ready..."
     for domain in standard with-fs with-zvol; do
-      echo "setup: Waiting for qemu guest agent to be running in domain '$domain'..." >&3
+      e2e_test_debug_log "setup: Waiting for qemu guest agent to be running in domain '$domain'..."
       until virsh qemu-agent-command "$domain" '{"execute":"guest-ping"}' &>/dev/null; do
         sleep 2
       done
     done
-    echo "setup: all VMs started successfully" >&3
+    e2e_test_debug_log "setup: all VMs started successfully"
     for domain in standard with-fs with-zvol; do
-      echo "setup: Waiting for cloud-init to complete in domain '$domain'..." >&3
+      e2e_test_debug_log "setup: Waiting for cloud-init to complete in domain '$domain'..."
       until qemu_exec "$domain" test -f /var/lib/cloud/instance/boot-finished; do
         sleep 2
       done
     done
-    echo "setup: VMs are ready" >&3
+    if ! qemu_exec with-fs grep -q /test/virtiofs /proc/mounts; then
+      e2e_test_debug_log "setup: virtiofs not mounted in 'with-fs' domain"
+      return 1
+    fi
+    if ! qemu_exec with-zvol grep -q /test/zvol /proc/mounts; then
+      e2e_test_debug_log "setup: zvol not mounted in 'with-zvol' domain"
+      return 1
+    fi
+    e2e_test_debug_log "setup: VMs are ready"
   }
 
   local fedora_url="https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2"
   local fedora_img="/var/lib/libvirt/images/$(basename "$fedora_url")"
   if [ ! -f "$fedora_img" ]; then
-    echo "setup: downloading Fedora Cloud image to $fedora_img" >&3
+    e2e_test_debug_log "setup: downloading Fedora Cloud image to $fedora_img"
     mkdir -p /var/lib/libvirt/images/library
     curl -sSfL -o "$fedora_img" "$fedora_url"
   fi
-  echo "setup: Fedora Cloud image is at $fedora_img" >&3
+  e2e_test_debug_log "setup: Fedora Cloud image is at $fedora_img"
 
   # Cleanup any leftover artifacts from previous runs
   cleanup
@@ -199,15 +225,18 @@ teardown() {
 }
 
 @test "zvirt: setup selftest" {
-  echo "setup: provisioning completed" >&3
+  e2e_test_debug_log "setup: provisioning completed"
 }
 
 @test "zvirt: take live snapshot in batch mode" {
   # Create witness files in all three domains before taking snapshots
-  qemu_exec standard touch /test/rootfs/before-backup1
-  qemu_exec with-fs touch /test/rootfs/before-backup1
-  qemu_exec with-zvol touch /test/zvol/before-backup1
-  [[ -f /srv/with-fs/before-backup1 ]]
+  qemu_exec standard touch /test/rootfs/witness-file
+  qemu_exec with-fs touch /test/virtiofs/witness-file
+  qemu_exec with-zvol touch /test/zvol/witness-file
+
+  # Verify that the witness files exist in the virtiofs host mount
+  run test -f /srv/with-fs/witness-file
+  assert_success
 
   # Take live snapshots for all three domains
   run zvirt snapshot -b -d standard -d with-zvol -d with-fs -s backup1 -l
@@ -227,13 +256,13 @@ teardown() {
   # Assert that the files created before the snapshot exist
   run qemu_exec standard ls -1 /test/rootfs
   assert_success
-  assert_output "before-backup1"
-  run qemu_exec with-fs ls -1 /test/rootfs
+  assert_output "witness-file"
+  run qemu_exec with-fs ls -1 /test/virtiofs
   assert_success
-  assert_output "before-backup1"
+  assert_output "witness-file"
   run qemu_exec with-zvol ls -1 /test/zvol
   assert_success
-  assert_output "before-backup1"
+  assert_output "witness-file"
 
   # List snapshots and verify their existence
   run zvirt list -d standard -d with-zvol -d with-fs
@@ -253,25 +282,408 @@ Snapshots for domain 'with-fs':
   assert_output --partial "with-zvol:"
   assert_output --partial "with-fs:"
   assert_output --partial "Pre-flight checks failed."
+
+  # Delete the witness files
+  run qemu_exec standard rm /test/rootfs/witness-file
+  assert_success
+  run qemu_exec with-fs rm /test/virtiofs/witness-file
+  assert_success
+  run qemu_exec with-zvol rm /test/zvol/witness-file
+  assert_success
+
+  # Sync all filesystems
+  run qemu_exec standard sync
+  assert_success
+  run qemu_exec with-fs sync
+  assert_success
+  run qemu_exec with-zvol sync
+  assert_success
+
+  # Verify that the witness files have been deleted in the virtiofs host mount
+  run test -f /srv/with-fs/witness-file
+  assert_failure
+
+  # Stop all domains
+  run virsh destroy standard
+  assert_success
+  run virsh destroy with-fs
+  assert_success
+  run virsh destroy with-zvol
+  assert_success
+
+  # Revert snapshots in batch mode
+  run zvirt revert -b -d standard -d with-zvol -d with-fs -s backup1
+  assert_success
+
+  # Check all domains are running again
+  run virsh domstate standard
+  assert_success
+  assert_output "running"
+  run virsh domstate with-fs
+  assert_success
+  assert_output "running"
+  run virsh domstate with-zvol
+  assert_success
+  assert_output "running"
+
+  # Verify that the witness files still exist after revert
+  run qemu_exec standard ls -1 /test/rootfs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-fs ls -1 /test/virtiofs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-zvol ls -1 /test/zvol
+  assert_success
+  assert_output "witness-file"
 }
 
+@test "zvirt: take live snapshot without batch mode" {
+  # Create witness files in all three domains before taking snapshots
+  qemu_exec standard touch /test/rootfs/witness-file
+  qemu_exec with-fs touch /test/virtiofs/witness-file
+  qemu_exec with-zvol touch /test/zvol/witness-file
 
-# @test "call_parse_args: take a crash-consistent snapshot for two domains" {
-#   run zvirt snapshot -d standard -d with-zvol -d with-fs backup2
-#   assert_success
-# }
+  # Verify that the witness files exist in the virtiofs host mount
+  run test -f /srv/with-fs/witness-file
+  assert_success
 
-# @test "call_parse_args: revert snapshot for a domain" {
-#   virsh destroy standard || true
-#   run zvirt revert -d standard -s backup2
-#   assert_success
-# }
+  # Take live snapshots for all three domains
+  run zvirt snapshot -d standard -d with-zvol -d with-fs -s backup1 -l
+  assert_success
 
-# @test "call_parse_args: revert snapshot for all domains in batch mode" {
-#   virsh destroy standard || true
-#   virsh destroy with-zvol || true
-#   virsh destroy with-fs || true
-#   run zvirt revert -b -d standard -d with-zvol -d with-fs -s backup1
-#   assert_success
-# }
+  # Verify that the domains are still running
+  run virsh domstate standard
+  assert_success
+  assert_output "running"
+  run virsh domstate with-fs
+  assert_success
+  assert_output "running"
+  run virsh domstate with-zvol
+  assert_success
+  assert_output "running"
 
+  # Assert that the files created before the snapshot exist
+  run qemu_exec standard ls -1 /test/rootfs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-fs ls -1 /test/virtiofs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-zvol ls -1 /test/zvol
+  assert_success
+  assert_output "witness-file"
+
+  # List snapshots and verify their existence
+  run zvirt list -d standard -d with-zvol -d with-fs
+  assert_success
+  assert_output "Snapshots for domain 'standard':
+  - backup1
+Snapshots for domain 'with-zvol':
+  - backup1
+Snapshots for domain 'with-fs':
+  - backup1"
+
+  # Attempt to take the same snapshot again and expect failure
+  run zvirt snapshot -d standard -d with-zvol -d with-fs -s backup1 -l
+  assert_failure
+  assert_output --partial "Snapshot 'backup1' already exists."
+  assert_output --partial "standard:"
+  assert_output --partial "with-zvol:"
+  assert_output --partial "with-fs:"
+  assert_output --partial "Pre-flight checks failed."
+
+  # Delete the witness files
+  run qemu_exec standard rm /test/rootfs/witness-file
+  assert_success
+  run qemu_exec with-fs rm /test/virtiofs/witness-file
+  assert_success
+  run qemu_exec with-zvol rm /test/zvol/witness-file
+  assert_success
+
+  # Sync all filesystems
+  run qemu_exec standard sync
+  assert_success
+  run qemu_exec with-fs sync
+  assert_success
+  run qemu_exec with-zvol sync
+  assert_success
+
+  # Verify that the witness files have been deleted in the virtiofs host mount
+  run test -f /srv/with-fs/witness-file
+  assert_failure
+
+  # Stop all domains
+  run virsh destroy standard
+  assert_success
+  run virsh destroy with-fs
+  assert_success
+  run virsh destroy with-zvol
+  assert_success
+
+  # Revert snapshots in batch mode
+  run zvirt revert -d standard -d with-zvol -d with-fs -s backup1
+  assert_success
+
+  # Check all domains are running again
+  run virsh domstate standard
+  assert_success
+  assert_output "running"
+  run virsh domstate with-fs
+  assert_success
+  assert_output "running"
+  run virsh domstate with-zvol
+  assert_success
+  assert_output "running"
+
+  # Verify that the witness files still exist after revert
+  run qemu_exec standard ls -1 /test/rootfs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-fs ls -1 /test/virtiofs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-zvol ls -1 /test/zvol
+  assert_success
+  assert_output "witness-file"
+}
+
+@test "zvirt: take crash-consistent snapshot without batch mode" {
+  # Create witness files in all three domains before taking snapshots
+  qemu_exec standard touch /test/rootfs/witness-file
+  qemu_exec with-fs touch /test/virtiofs/witness-file
+  qemu_exec with-zvol touch /test/zvol/witness-file
+
+  # Verify that the witness files exist in the virtiofs host mount
+  run test -f /srv/with-fs/witness-file
+  assert_success
+
+  # Take crash-consistent snapshots for all three domains
+  run zvirt snapshot -d standard -d with-zvol -d with-fs -s backup1
+  assert_success
+
+  # Verify that the domains are still running
+  run virsh domstate standard
+  assert_success
+  assert_output "running"
+  run virsh domstate with-fs
+  assert_success
+  assert_output "running"
+  run virsh domstate with-zvol
+  assert_success
+  assert_output "running"
+
+  # Assert that the files created before the snapshot exist
+  run qemu_exec standard ls -1 /test/rootfs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-fs ls -1 /test/virtiofs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-zvol ls -1 /test/zvol
+  assert_success
+  assert_output "witness-file"
+
+  # List snapshots and verify their existence
+  run zvirt list -d standard -d with-zvol -d with-fs
+  assert_success
+  assert_output "Snapshots for domain 'standard':
+  - backup1
+Snapshots for domain 'with-zvol':
+  - backup1
+Snapshots for domain 'with-fs':
+  - backup1"
+
+  # Attempt to take the same snapshot again and expect failure
+  run zvirt snapshot -d standard -d with-zvol -d with-fs -s backup1
+  assert_failure
+  assert_output --partial "Snapshot 'backup1' already exists."
+  assert_output --partial "standard:"
+  assert_output --partial "with-zvol:"
+  assert_output --partial "with-fs:"
+  assert_output --partial "Pre-flight checks failed."
+
+  # Delete the witness files
+  run qemu_exec standard rm /test/rootfs/witness-file
+  assert_success
+  run qemu_exec with-fs rm /test/virtiofs/witness-file
+  assert_success
+  run qemu_exec with-zvol rm /test/zvol/witness-file
+  assert_success
+
+  # Sync all filesystems
+  run qemu_exec standard sync
+  assert_success
+  run qemu_exec with-fs sync
+  assert_success
+  run qemu_exec with-zvol sync
+  assert_success
+
+  # Wait a moment to ensure all writes are flushed
+  sleep 2
+
+  # Verify that the witness files have been deleted in the virtiofs host mount
+  run test -f /srv/with-fs/witness-file
+  assert_failure
+
+  # Stop all domains
+  run virsh destroy standard
+  assert_success
+  run virsh destroy with-fs
+  assert_success
+  run virsh destroy with-zvol
+  assert_success
+
+  # Revert snapshots in batch mode
+  run zvirt revert -d standard -d with-zvol -d with-fs -s backup1
+  assert_success
+
+  # Check all domains have been shut off
+  run virsh domstate standard
+  assert_success
+  assert_output "shut off"
+  run virsh domstate with-fs
+  assert_success
+  assert_output "shut off"
+  run virsh domstate with-zvol
+  assert_success
+  assert_output "shut off"
+
+  # Start all domains
+  run virsh start standard
+  assert_success
+  run virsh start with-fs
+  assert_success
+  run virsh start with-zvol
+  assert_success
+
+  # Wait for all domains to be fully ready
+  readiness_wait
+
+  # Verify that the witness files still exist after revert
+  run qemu_exec standard ls -1 /test/rootfs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-fs ls -1 /test/virtiofs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-zvol ls -1 /test/zvol
+  assert_success
+  assert_output "witness-file"
+}
+
+@test "zvirt: take crash-consistent snapshot with batch mode" {
+  # Create witness files in all three domains before taking snapshots
+  qemu_exec standard touch /test/rootfs/witness-file
+  qemu_exec with-fs touch /test/virtiofs/witness-file
+  qemu_exec with-zvol touch /test/zvol/witness-file
+
+  # Verify that the witness files exist in the virtiofs host mount
+  run test -f /srv/with-fs/witness-file
+  assert_success
+
+  # Take crash-consistent snapshots for all three domains
+  run zvirt snapshot -b -d standard -d with-zvol -d with-fs -s backup1
+  assert_success
+
+  # Verify that the domains are still running
+  run virsh domstate standard
+  assert_success
+  assert_output "running"
+  run virsh domstate with-fs
+  assert_success
+  assert_output "running"
+  run virsh domstate with-zvol
+  assert_success
+  assert_output "running"
+
+  # Assert that the files created before the snapshot exist
+  run qemu_exec standard ls -1 /test/rootfs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-fs ls -1 /test/virtiofs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-zvol ls -1 /test/zvol
+  assert_success
+  assert_output "witness-file"
+
+  # List snapshots and verify their existence
+  run zvirt list -d standard -d with-zvol -d with-fs
+  assert_success
+  assert_output "Snapshots for domain 'standard':
+  - backup1
+Snapshots for domain 'with-zvol':
+  - backup1
+Snapshots for domain 'with-fs':
+  - backup1"
+
+  # Attempt to take the same snapshot again and expect failure
+  run zvirt snapshot -b -d standard -d with-zvol -d with-fs -s backup1
+  assert_failure
+  assert_output --partial "Snapshot 'backup1' already exists."
+  assert_output --partial "standard:"
+  assert_output --partial "with-zvol:"
+  assert_output --partial "with-fs:"
+  assert_output --partial "Pre-flight checks failed."
+
+  # Delete the witness files
+  run qemu_exec standard rm /test/rootfs/witness-file
+  assert_success
+  run qemu_exec with-fs rm /test/virtiofs/witness-file
+  assert_success
+  run qemu_exec with-zvol rm /test/zvol/witness-file
+  assert_success
+
+  # Sync all filesystems
+  run qemu_exec standard sync
+  assert_success
+  run qemu_exec with-fs sync
+  assert_success
+  run qemu_exec with-zvol sync
+  assert_success
+
+  # Wait a moment to ensure all writes are flushed
+  sleep 2
+
+  # Verify that the witness files have been deleted in the virtiofs host mount
+  run test -f /srv/with-fs/witness-file
+  assert_failure
+
+  # Stop all domains
+  run virsh destroy standard
+  assert_success
+  run virsh destroy with-fs
+  assert_success
+  run virsh destroy with-zvol
+  assert_success
+
+  # Revert snapshots in batch mode
+  run zvirt revert -b -d standard -d with-zvol -d with-fs -s backup1
+  assert_success
+
+  # Check all domains are running again
+  run virsh domstate standard
+  assert_success
+  assert_output "running"
+  run virsh domstate with-fs
+  assert_success
+  assert_output "running"
+  run virsh domstate with-zvol
+  assert_success
+  assert_output "running"
+
+  # Wait for all domains to be fully ready
+  readiness_wait
+
+  # Verify that the witness files still exist after revert
+  run qemu_exec standard ls -1 /test/rootfs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-fs ls -1 /test/virtiofs
+  assert_success
+  assert_output "witness-file"
+  run qemu_exec with-zvol ls -1 /test/zvol
+  assert_success
+  assert_output "witness-file"
+}

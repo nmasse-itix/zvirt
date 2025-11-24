@@ -3,9 +3,8 @@
 bootcmd:
 - setsebool -P virt_qemu_ga_run_unconfined on
 - setsebool -P virt_qemu_ga_read_nonsecurity_files on
-
-runcmd:
-- install -o root -g root -m 0777 -d /test/rootfs
+- setsebool -P virt_rw_qemu_ga_data on
+- install -o root -g root -m 0777 --context=system_u:object_r:virt_qemu_ga_data_t:s0 -d /test/rootfs
 
 users:
 - name: e2e

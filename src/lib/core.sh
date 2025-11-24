@@ -115,11 +115,6 @@ function parse_args () {
         should_exit=1
       fi
 
-      if [ "$batch" -eq 1 ] && [ "$live" -ne 1 ]; then
-        echo "Error: Batch mode requires live snapshot mode."
-        should_exit=1
-      fi
-
       if [[ ! "$snapshot_name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
         echo "Error: Snapshot name '$snapshot_name' contains invalid characters. Only alphanumeric characters, dots (.), underscores (_) and hyphens (-) are allowed."
         should_exit=1
@@ -199,6 +194,12 @@ function domain_checks () {
 
   state=$(domain_state "$domain")
 
+  # Store those values in cache for later use
+  domain_params_cache["$domain/state"]="${state}"
+  domain_params_cache["$domain/dataset"]="${zfs_dataset}"
+  domain_params_cache["$domain/mountpoint"]="${zfs_mountpoint}"
+  domain_params_cache["$domain/zvols"]="${zfs_zvols[*]}"
+
   case "$action" in
     snapshot)
       # Check domain state
@@ -223,7 +224,7 @@ function domain_checks () {
       done
 
       # Check if save file already exists for live snapshot
-      if [ -f "${zfs_mountpoint}/domain.save" ]; then
+      if [ "$live" -eq 1 ] && has_save_file "$domain"; then
         error "$domain: Save file '${zfs_mountpoint}/domain.save' already exists." ; error=1
       fi
     ;;
@@ -254,15 +255,10 @@ function domain_checks () {
     return 1
   fi
 
-  # Store those values in cache for later use
-  domain_params_cache["$domain/state"]="${state}"
-  domain_params_cache["$domain/dataset"]="${zfs_dataset}"
-  domain_params_cache["$domain/mountpoint"]="${zfs_mountpoint}"
-  domain_params_cache["$domain/zvols"]="${zfs_zvols[*]}"
-
   return 0
 }
 
+# Gets the mountpoint of the specified ZFS dataset.
 function get_zfs_dataset_mountpoint () {
   local zfs_dataset="$1"
   zfs get -H -o value mountpoint "${zfs_dataset}"
@@ -393,6 +389,7 @@ function preflight_checks () {
   return $error
 }
 
+# Removes the save file for the specified domain.
 function remove_save_file () {
   local domain="$1"
   zfs_mountpoint="${domain_params_cache["$domain/mountpoint"]}"
@@ -402,10 +399,61 @@ function remove_save_file () {
   fi
 }
 
+# Checks if the save file exists for the specified domain.
+function has_save_file () {
+  local domain="$1"
+  zfs_mountpoint="${domain_params_cache["$domain/mountpoint"]}"
+  if [ -f "${zfs_mountpoint}/domain.save" ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Thaws the specified domain filesystem.
+function fsthaw_domain () {
+  local domain="$1"
+  virsh domfsthaw "$domain"
+}
+
+# Freezes the specified domain filesystem.
+function fsfreeze_domain () {
+  local domain="$1"
+  virsh domfsfreeze "$domain"
+}
+
+# Thaws all domains in the list.
+function fsthaw_all_domains () {
+  local domains=( "$@" )
+
+  for domain in "${domains[@]}"; do
+    log_verbose "$domain: Thawing domain..."
+    state="${domain_params_cache["$domain/state"]}"
+    if [ "$state" == "running" ]; then
+      fsthaw_domain "$domain"
+    fi
+  done
+}
+
+# Freezes all domains in the list.
+function fsfreeze_all_domains () {
+  local domains=( "$@" )
+
+  for domain in "${domains[@]}"; do
+    log_verbose "$domain: Freezing domain..."
+    state="${domain_params_cache["$domain/state"]}"
+    if [ "$state" == "running" ]; then
+      fsfreeze_domain "$domain"
+    fi
+  done
+}
+
 # Takes snapshots for all specified domains.
 function take_snapshots () {
-  if [ "$batch" -eq 1 ]; then
+  if [ "$batch" -eq 1 ] && [ "$live" -eq 1 ]; then
     pause_all_domains "${domains[@]}"
+  elif [ "$batch" -eq 1 ] && [ "$live" -eq 0 ]; then
+    fsfreeze_all_domains "${domains[@]}"
   fi
 
   for domain in "${domains[@]}"; do
@@ -417,12 +465,20 @@ function take_snapshots () {
         remove_save_file "$domain"
       fi
     else
+      if [ "$batch" -eq 0 ] && [ "$state" == "running" ]; then
+        fsfreeze_domain "$domain"
+      fi
       take_crash_consistent_snapshot "$domain" "$snapshot_name"
+      if [ "$batch" -eq 0 ] && [ "$state" == "running" ]; then
+        fsthaw_domain "$domain"
+      fi
     fi
   done
 
-  if [ "$batch" -eq 1 ]; then
+  if [ "$batch" -eq 1 ] && [ "$live" -eq 1 ]; then
     resume_all_domains "${domains[@]}"
+  elif [ "$batch" -eq 1 ] && [ "$live" -eq 0 ]; then
+    fsthaw_all_domains "${domains[@]}"
   fi
 
   return 0
@@ -432,7 +488,12 @@ function take_snapshots () {
 function revert_snapshots () {
   for domain in "${domains[@]}"; do
     revert_snapshot "$domain" "$snapshot_name"
-    restore_domain "$domain"
+    if has_save_file "$domain"; then
+      restore_domain "$domain"
+      if [ "$batch" -eq 1 ]; then
+        remove_save_file "$domain"
+      fi
+    fi
   done
 
   if [ "$batch" -eq 1 ]; then

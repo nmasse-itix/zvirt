@@ -1,15 +1,13 @@
 #cloud-config
 
 mounts:
-- [ data, /test/virtiofs, virtiofs, "defaults,nofail", "0", "0" ]
+- [ data, /test/virtiofs, virtiofs, "defaults,context=system_u:object_r:virt_qemu_ga_data_t:s0", "0", "0" ]
 
 bootcmd:
 - setsebool -P virt_qemu_ga_run_unconfined on
 - setsebool -P virt_qemu_ga_read_nonsecurity_files on
-
-runcmd:
-- install -o root -g root -m 0777 -d /test/virtiofs
-- mount -a
+- setsebool -P virt_rw_qemu_ga_data on
+- install -o root -g root -d /test/virtiofs
 
 users:
 - name: e2e

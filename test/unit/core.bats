@@ -165,6 +165,23 @@ snapshot2"
   assert_failure
 }
 
+@test "has_save_file: nominal case" {
+  # Temporary directory for save files
+  local temp_dir="$(mktemp -d)"
+  mkdir -p "$temp_dir/foo" "$temp_dir/bar"
+  # Only foo has a save file
+  touch "$temp_dir/foo/domain.save"
+
+  # Fill up the cache
+  declare -A domain_params_cache=( ["foo/mountpoint"]="$temp_dir/foo" ["bar/mountpoint"]="$temp_dir/bar" )
+
+  # Run the test
+  run in_bash has_save_file foo
+  assert_success
+  run in_bash has_save_file bar
+  assert_failure
+}
+
 @test "take_live_snapshot: nominal case" {
   # Mock the underlying tools
   declare -A domain_params_cache=( ["foo/state"]="running" ["foo/dataset"]="data/domains/foo" ["foo/mountpoint"]="/var/lib/libvirt/images/foo" ["foo/zvols"]="" )
@@ -330,6 +347,78 @@ data/domains/baz/virtiofs"
   [[ "$(mock_get_call_num ${virsh_mock})" -eq 2 ]]
 }
 
+@test "fsthaw_all_domains: nominal case" {
+  # Mock the underlying tools
+  local domains=( "foo" "bar" )
+  declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
+  fsthaw_mock="$(mock_create)"
+  fsthaw_domain() {
+    if [[ "$*" == "foo" ]]; then
+      $fsthaw_mock "$@"
+      return $?
+    fi
+    return 1
+  }
+  export -f fsthaw_domain
+  export fsthaw_mock
+
+  # Run the test
+  run in_bash fsthaw_all_domains "${domains[@]}"
+  assert_success
+  [[ "$(mock_get_call_num ${fsthaw_mock})" -eq 1 ]]
+}
+
+@test "fsfreeze_all_domains: nominal case" {
+  # Mock the underlying tools
+  local domains=( "foo" "bar" )
+  declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
+  fsfreeze_mock="$(mock_create)"
+  fsfreeze_domain() {
+    if [[ "$*" == "foo" ]]; then
+      $fsfreeze_mock "$@"
+      return $?
+    fi
+    return 1
+  }
+  export -f fsfreeze_domain
+  export fsfreeze_mock
+
+  # Run the test
+  run in_bash fsfreeze_all_domains "${domains[@]}"
+  assert_success
+  [[ "$(mock_get_call_num ${fsfreeze_mock})" -eq 1 ]]
+}
+
+@test "fsthaw_domain: nominal case" {
+  # Mock the underlying tools
+  virsh() {
+    [[ "$*" == "domfsthaw foo" ]] && return 0
+    return 1
+  }
+  export -f virsh
+
+  # Run the test
+  run in_bash virsh domfsthaw "foo"
+  assert_success
+  run in_bash virsh domfsthaw "bar"
+  assert_failure
+}
+
+@test "fsfreeze_domain: nominal case" {
+  # Mock the underlying tools
+  virsh() {
+    [[ "$*" == "domfsfreeze foo" ]] && return 0
+    return 1
+  }
+  export -f virsh
+
+  # Run the test
+  run in_bash virsh domfsfreeze "foo"
+  assert_success
+  run in_bash virsh domfsfreeze "bar"
+  assert_failure
+}
+
 @test "domain_checks: nominal case" {
   # Mock the underlying tools
   domain_exists() {
@@ -393,6 +482,24 @@ data/domains/baz/virtiofs"
   assert_success
   run in_bash domain_checks revert bar backup1
   assert_success
+
+  # Live mode with existing save file
+  has_save_file() {
+    return 0
+  }
+  export -f has_save_file
+  live=1
+  run in_bash domain_checks snapshot foo backup2
+  assert_failure
+
+  # Live mode with non-existing save file
+  has_save_file() {
+    return 1
+  }
+  export -f has_save_file
+  live=1
+  run in_bash domain_checks snapshot foo backup2
+  assert_success
 }
 
 @test "list_snapshots: nominal case" {
@@ -451,7 +558,21 @@ snapshot2"
   restore_domain() { return 1; }
   resume_all_domains() { return 1; }
   remove_save_file() { return 1; }
-  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file
+  fsfreeze_all_domains() { return 1; }
+  fsthaw_all_domains() { return 1; }
+  fsfreeze_domain() {
+    if [[ "$*" == "foo" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  fsthaw_domain() {
+    if [[ "$*" == "foo" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file fsfreeze_all_domains fsthaw_all_domains fsfreeze_domain fsthaw_domain
 
   declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
 
@@ -478,29 +599,26 @@ snapshot2"
     fi
     return 1
   }
-  pause_all_domains() {
-    if [[ "$*" == "foo bar" ]]; then
-      return 0
-    fi
-    return 1
-  }
+  pause_all_domains() { return 1; }
   take_live_snapshot() { return 1; }
   restore_domain() { return 1; }
-  resume_all_domains() {
+  resume_all_domains() { return 1; }
+  remove_save_file() { return 1; }
+  fsfreeze_all_domains() {
     if [[ "$*" == "foo bar" ]]; then
       return 0
     fi
     return 1
-
   }
-  remove_save_file() {
-    regex="^(foo|bar) backup$"
-    if [[ "$*" =~ $regex ]]; then
+  fsthaw_all_domains() {
+    if [[ "$*" == "foo bar" ]]; then
       return 0
     fi
     return 1
   }
-  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file
+  fsfreeze_domain() { return 1; }
+  fsthaw_domain() { return 1; }
+  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file fsfreeze_all_domains fsthaw_all_domains fsfreeze_domain fsthaw_domain
 
   declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
 
@@ -541,7 +659,86 @@ snapshot2"
   }
   resume_all_domains() { return 1; }
   remove_save_file() { return 1; }
-  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file
+  fsfreeze_all_domains() { return 1; }
+  fsthaw_all_domains() { return 1; }
+  fsfreeze_domain() {
+    if [[ "$*" == "bar" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  fsthaw_domain() {
+    if [[ "$*" == "bar" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file fsfreeze_all_domains fsthaw_all_domains fsfreeze_domain fsthaw_domain
+
+  declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
+
+  # Run the test
+  domains=( "foo" "bar" )
+  snapshot_name="backup"
+  batch=0
+  live=1
+  run in_bash take_snapshots
+  assert_success
+
+  # Add a non-existing domain to the list
+  domains+=( "baz" )
+  run in_bash take_snapshots
+  assert_failure
+}
+
+@test "take_snapshots: batch=1, live=1" {
+  # Mock the underlying tools
+  take_crash_consistent_snapshot() {
+    if [[ "$*" == "bar backup" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  pause_all_domains() {
+    if [[ "$*" == "foo bar" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  take_live_snapshot() {
+    if [[ "$*" == "foo backup" ]]; then
+      return 0
+    fi
+    return 1
+ }
+  restore_domain() {
+    if [[ "$*" == "foo" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  resume_all_domains() {
+    if [[ "$*" == "foo bar" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  remove_save_file() { return 1; }
+  fsfreeze_all_domains() { return 1; }
+  fsthaw_all_domains() { return 1; }
+  fsfreeze_domain() {
+    if [[ "$*" == "bar" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  fsthaw_domain() {
+    if [[ "$*" == "bar" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  export -f take_crash_consistent_snapshot pause_all_domains take_live_snapshot restore_domain resume_all_domains remove_save_file fsfreeze_all_domains fsthaw_all_domains fsfreeze_domain fsthaw_domain
 
   declare -A domain_params_cache=( ["foo/state"]="running" ["bar/state"]="shut off" )
 
@@ -569,15 +766,31 @@ snapshot2"
     return 1
   }
   restore_domain() {
-    regex="^(foo|bar)$"
-    if [[ "$*" =~ $regex ]]; then
+    if [[ "$*" == "foo" ]]; then
       return 0
     fi
     return 1
   }
   resume_all_domains() { return 1; }
-  export -f revert_snapshot restore_domain resume_all_domains
-
+  has_save_file() {
+    if [[ "$*" == "foo" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  remove_save_file() { return 1; }
+  domain_state() {
+    if [[ "$*" == "foo" ]]; then
+      echo "paused"
+      return 0
+    elif [[ "$*" == "bar" ]]; then
+      echo "shut off"
+      return 0
+    fi
+    return 1
+  }
+  export -f revert_snapshot restore_domain resume_all_domains has_save_file remove_save_file domain_state
+  
   # Run the test
   domains=( "foo" "bar" )
   snapshot_name="backup"
@@ -601,8 +814,7 @@ snapshot2"
     return 1
   }
   restore_domain() {
-    regex="^(foo|bar)$"
-    if [[ "$*" =~ $regex ]]; then
+    if [[ "$*" == "foo" ]]; then
       return 0
     fi
     return 1
@@ -613,7 +825,29 @@ snapshot2"
     fi
     return 1
   }
-  export -f revert_snapshot restore_domain resume_all_domains
+  has_save_file() {
+    if [[ "$*" == "foo" ]]; then
+      return 0
+    fi
+    return 1
+  }
+  remove_save_file() {
+    if [[ "$*" == "foo" ]]; then
+      return 0
+    fi
+    return 1
+ }
+  domain_state() {
+    if [[ "$*" == "foo" ]]; then
+      echo "paused"
+      return 0
+    elif [[ "$*" == "bar" ]]; then
+      echo "shut off"
+      return 0
+    fi
+    return 1
+  }
+  export -f revert_snapshot restore_domain resume_all_domains has_save_file remove_save_file domain_state
 
   # Run the test
   domains=( "foo" "bar" )
