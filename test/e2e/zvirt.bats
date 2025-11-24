@@ -8,10 +8,10 @@ setup() {
   export LANG=C LC_ALL=C
 
   zvirt () {
-    "${BATS_TEST_DIRNAME}/../../src/zvirt" "$@"
+    "${BATS_TEST_DIRNAME}/../../src/bin/zvirt" "$@"
   }
 
-  declare -g e2e_test_enable_debug=0
+  declare -g e2e_test_enable_debug=1
   e2e_test_debug_log(){
     if [ "$e2e_test_enable_debug" -eq 1 ]; then
       echo "$@" >&3

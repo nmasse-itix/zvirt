@@ -5,7 +5,7 @@ setup() {
   bats_load_library 'bats-assert'
 
   set -Eeuo pipefail
-  source "${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
+  source "${BATS_TEST_DIRNAME}/../../src/lib/zvirt/core.sh"
 
   function call_parse_args () {
     init_global_variables

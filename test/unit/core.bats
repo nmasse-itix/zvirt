@@ -8,7 +8,7 @@ setup() {
   # Load the core library and export its functions
   local fn_before="$(declare -F | cut -d ' ' -f 3 | sort)"
   set -Eeuo pipefail
-  source "${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
+  source "${BATS_TEST_DIRNAME}/../../src/lib/zvirt/core.sh"
   local fn_after="$(declare -F | cut -d ' ' -f 3 | sort)"
   declare -a zvirt_fn=( $(comm -13 <(echo "$fn_before") <(echo "$fn_after")) )
   for fn in "${zvirt_fn[@]}"; do
