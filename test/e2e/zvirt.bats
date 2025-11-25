@@ -228,6 +228,153 @@ teardown() {
   e2e_test_debug_log "setup: provisioning completed"
 }
 
+@test "zvirt: prune snapshots" {
+  # Take five snapshots in a row, each time creating and deleting a witness file
+  for snap in s1 s2 s3 s4 s5; do
+    # Create witness files in all three domains before taking snapshots
+    qemu_exec standard touch /test/rootfs/witness-file.$snap
+    qemu_exec with-fs touch /test/virtiofs/witness-file.$snap
+    qemu_exec with-zvol touch /test/zvol/witness-file.$snap
+
+    # Verify that the witness files exist in the virtiofs host mount
+    run test -f /srv/with-fs/witness-file.$snap
+    assert_success
+
+    # Take crash-consistent snapshots for all three domains
+    run zvirt snapshot -d standard -d with-zvol -d with-fs -s $snap
+    assert_success
+
+    # Verify that the domains are still running
+    run virsh domstate standard
+    assert_success
+    assert_output "running"
+    run virsh domstate with-fs
+    assert_success
+    assert_output "running"
+    run virsh domstate with-zvol
+    assert_success
+    assert_output "running"
+
+    # Assert that the files created before the snapshot exist
+    run qemu_exec standard ls -1 /test/rootfs
+    assert_success
+    assert_output "witness-file.$snap"
+    run qemu_exec with-fs ls -1 /test/virtiofs
+    assert_success
+    assert_output "witness-file.$snap"
+    run qemu_exec with-zvol ls -1 /test/zvol
+    assert_success
+    assert_output "witness-file.$snap"
+
+    # Delete the witness files
+    run qemu_exec standard rm /test/rootfs/witness-file.$snap
+    assert_success
+    run qemu_exec with-fs rm /test/virtiofs/witness-file.$snap
+    assert_success
+    run qemu_exec with-zvol rm /test/zvol/witness-file.$snap
+    assert_success
+
+    # Sync all filesystems
+    run qemu_exec standard sync
+    assert_success
+    run qemu_exec with-fs sync
+    assert_success
+    run qemu_exec with-zvol sync
+    assert_success
+
+    # Wait a moment to ensure all writes are flushed
+    sleep 2
+
+    # Verify that the witness files have been deleted in the virtiofs host mount
+    run test -f /srv/with-fs/witness-file.$snap
+    assert_failure
+  done
+
+  # List snapshots and verify their existence
+  run zvirt list -d standard -d with-zvol -d with-fs
+  assert_success
+  assert_output "Snapshots for domain 'standard':
+  - s1
+  - s2
+  - s3
+  - s4
+  - s5
+Snapshots for domain 'with-zvol':
+  - s1
+  - s2
+  - s3
+  - s4
+  - s5
+Snapshots for domain 'with-fs':
+  - s1
+  - s2
+  - s3
+  - s4
+  - s5"
+
+  # Prune snapshots to keep only the latest two
+  run zvirt prune -k 2 -d standard -d with-zvol -d with-fs
+  assert_success
+
+  # List snapshots and verify their existence
+  run zvirt list -d standard -d with-zvol -d with-fs
+  assert_success
+  assert_output "Snapshots for domain 'standard':
+  - s4
+  - s5
+Snapshots for domain 'with-zvol':
+  - s4
+  - s5
+Snapshots for domain 'with-fs':
+  - s4
+  - s5"
+
+  # Stop all domains
+  run virsh destroy standard
+  assert_success
+  run virsh destroy with-fs
+  assert_success
+  run virsh destroy with-zvol
+  assert_success
+
+  # Revert snapshots in batch mode
+  run zvirt revert -d standard -d with-zvol -d with-fs -s s4
+  assert_success
+
+  # Check all domains have been shut off
+  run virsh domstate standard
+  assert_success
+  assert_output "shut off"
+  run virsh domstate with-fs
+  assert_success
+  assert_output "shut off"
+  run virsh domstate with-zvol
+  assert_success
+  assert_output "shut off"
+
+  # Start all domains
+  run virsh start standard
+  assert_success
+  run virsh start with-fs
+  assert_success
+  run virsh start with-zvol
+  assert_success
+
+  # Wait for all domains to be fully ready
+  readiness_wait
+
+  # Verify that the witness files still exist after revert
+  run qemu_exec standard ls -1 /test/rootfs
+  assert_success
+  assert_output "witness-file.s4"
+  run qemu_exec with-fs ls -1 /test/virtiofs
+  assert_success
+  assert_output "witness-file.s4"
+  run qemu_exec with-zvol ls -1 /test/zvol
+  assert_success
+  assert_output "witness-file.s4"
+}
+
 @test "zvirt: take live snapshot in batch mode" {
   # Create witness files in all three domains before taking snapshots
   qemu_exec standard touch /test/rootfs/witness-file

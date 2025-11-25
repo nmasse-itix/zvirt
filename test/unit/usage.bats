@@ -11,7 +11,7 @@ setup() {
     init_global_variables
     parse_args "$@"
     ret=$?
-    declare -p action batch live verbose domains snapshot_name
+    declare -p action batch live verbose domains snapshot_name keep
     return $ret
   }
 }
@@ -65,3 +65,22 @@ setup() {
   assert_output --partial 'live="0"'
 }
 
+@test "call_parse_args: prune snapshots for all domains" {
+  virsh() {
+    if [[ "$*" == "list --all --name" ]]; then
+      echo -e "foo\nbar"
+      return 0
+    fi
+    return 1
+  }
+
+  run call_parse_args prune -k 5
+  assert_success
+  assert_output --partial 'action="prune"'
+  assert_output --partial 'domains=([0]="foo" [1]="bar")'
+  assert_output --partial 'keep="5"'
+
+  run call_parse_args prune
+  assert_failure
+  assert_output --partial "The -k option with a positive integer value must be specified for the 'prune' action"
+}

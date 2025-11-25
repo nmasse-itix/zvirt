@@ -19,7 +19,7 @@ setup() {
   # and with access to the domain_params_cache associative array
   in_bash() {
     local vars=""
-    for var in domain_params_cache snapshot_name domains verbose action batch live; do
+    for var in domain_params_cache snapshot_name domains verbose action batch live keep; do
       if declare -p "${var}" &>/dev/null; then
         vars+="$(declare -p "${var}") ; "
       fi
@@ -504,22 +504,7 @@ data/domains/baz/virtiofs"
 
 @test "list_snapshots: nominal case" {
   # Mock the underlying tools
-  get_zfs_datasets_from_domain() {
-    if [[ "$*" == "foo" ]]; then
-      echo "data/domains/foo"
-      return 0
-    fi
-    return 1
-  }
-  get_zfs_snapshots_from_dataset() {
-    if [[ "$*" == "data/domains/foo" ]]; then
-      echo "snapshot1
-snapshot2"
-      return 0
-    fi
-    return 1
-  }
-  export -f get_zfs_datasets_from_domain get_zfs_snapshots_from_dataset
+  declare -A domain_params_cache=( ["foo/snapshots"]="snapshot1 snapshot2" ["bar/snapshots"]="snapshot3 snapshot4" )
 
   # Run the test
   run in_bash list_snapshots foo
@@ -527,6 +512,42 @@ snapshot2"
   assert_output "Snapshots for domain 'foo':
   - snapshot1
   - snapshot2"
+}
+
+@test "prune_snapshots: nominal case" {
+  # Mock the underlying tools
+  declare -A domain_params_cache=( ["foo/snapshots"]="s1 s2 s3 s4 s5" ["bar/snapshots"]="s1 s2 s3 s4 s5" ["baz/snapshots"]="s1" ["foo/dataset"]="data/domains/foo" ["bar/dataset"]="data/domains/bar" ["baz/dataset"]="data/domains/baz" )
+  zfs_destroy_mock="$(mock_create)"
+  zfs() {
+    if [[ "$*" == "destroy -r data/domains/foo@%s3" ]] || [[ "$*" == "destroy -r data/domains/bar@%s2" ]]; then
+      $zfs_destroy_mock "$@"
+      return $?
+    fi
+    return 1
+  }
+  export -f zfs
+  export zfs_destroy_mock
+
+  # Run the test
+  keep=2
+  run in_bash prune_snapshots foo
+  assert_success
+  [[ "$(mock_get_call_num ${zfs_destroy_mock})" -eq 1 ]] # Deletion up to s3
+
+  keep=3
+  run in_bash prune_snapshots bar
+  assert_success
+  [[ "$(mock_get_call_num ${zfs_destroy_mock})" -eq 2 ]] # Deletion up to s2
+
+  keep=5
+  run in_bash prune_snapshots bar
+  assert_success
+  [[ "$(mock_get_call_num ${zfs_destroy_mock})" -eq 2 ]] # No deletion should occur
+
+  keep=1
+  run in_bash prune_snapshots baz
+  assert_success
+  [[ "$(mock_get_call_num ${zfs_destroy_mock})" -eq 2 ]] # No deletion should occur
 }
 
 @test "preflight_checks: nominal case" {

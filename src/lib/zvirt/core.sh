@@ -33,11 +33,13 @@ Options:
   -d DOMAIN   specify domain name (you can specify multiple -d options)
   -s SNAPSHOT specify snapshot name
   -b          batch mode (pause all domains, take snapshots, then resume all domains)
+  -k N        keep at most N snapshots per domain (used with 'prune' action)
 
 Actions:
   snapshot    take a snapshot of the specified domain(s)
   revert      revert to a snapshot of the specified domain(s)
   list        list snapshots of the specified domain(s) (or all domains if none specified)
+  prune       prune old snapshots of the specified domain(s) according to retention policy
 
 Examples:
   Take a crash-consistent snapshot of domain 'vm1' named 'backup1':
@@ -54,6 +56,9 @@ Examples:
 
   List snapshots of all domains:
     ${0##*/} list
+  
+  Prune snapshots of all domains, keeping at most 5 snapshots:
+    ${0##*/} prune -k 5
 EOF
 }
 
@@ -66,6 +71,7 @@ function init_global_variables () {
   action=""
   batch=0
   live=0
+  keep=0
 
   # Cache for domain parameters to avoid redundant calls to the zfs command
   declare -gA domain_params_cache=( )
@@ -83,7 +89,7 @@ function parse_args () {
 
   OPTIND=1 # Reset in case getopts has been used previously in the shell.
 
-  while getopts "h?blvd:s:" opt; do
+  while getopts "h?blvd:s:k:" opt; do
     case "$opt" in
       h|\?)
         show_help
@@ -99,6 +105,8 @@ function parse_args () {
         ;;
       l)  live=1
         ;;
+      k)  keep="$OPTARG"
+        ;;
       *)  show_help >&2
         exit 1
         ;;
@@ -112,6 +120,11 @@ function parse_args () {
   if [ $# -ne 0 ]; then
     echo "Error: Unexpected positional arguments: $*"
     should_exit=1
+  fi
+
+  if [ ${#domains[@]} -eq 0 ]; then
+    # Get all domains
+    mapfile -t domains < <(virsh list --all --name | grep -v '^$')
   fi
 
   case "$action" in
@@ -139,6 +152,12 @@ function parse_args () {
       ;;
     list)
       ;;
+    prune)
+      if [ "$keep" -le 0 ]; then
+        echo "Error: The -k option with a positive integer value must be specified for the 'prune' action."
+        should_exit=1
+      fi
+      ;;
     *) 
       echo "Error: Unsupported action '$action'."
       should_exit=1
@@ -164,7 +183,10 @@ function domain_exists () {
 function domain_checks () {
   local action="$1"
   local domain="$2"
-  local snapshot_name="$3"
+  local snapshot_name
+  if [ "$action" == "snapshot" ] || [ "$action" == "revert" ]; then
+    snapshot_name="$3"
+  fi
   local error=0
   local state=""
 
@@ -194,8 +216,6 @@ function domain_checks () {
 
   if [ -z "$zfs_mountpoint" ] || [[ ! "$zfs_mountpoint" =~ ^/ ]]; then
     error "$domain: Wrong ZFS mountpoint for dataset '$zfs_dataset': '$zfs_mountpoint'." ; error=1
-#  elif [ ! -d "$zfs_mountpoint" ]; then
-#    error "$domain: ZFS mountpoint '$zfs_mountpoint' does not exist." ; error=1
   fi
 
   state=$(domain_state "$domain")
@@ -205,6 +225,7 @@ function domain_checks () {
   domain_params_cache["$domain/dataset"]="${zfs_dataset}"
   domain_params_cache["$domain/mountpoint"]="${zfs_mountpoint}"
   domain_params_cache["$domain/zvols"]="${zfs_zvols[*]}"
+  domain_params_cache["$domain/snapshots"]="${zfs_dataset_snapshots[*]}"
 
   case "$action" in
     snapshot)
@@ -251,7 +272,15 @@ function domain_checks () {
         fi
       done
       ;;
+    list)
+      ;;
+    prune)
+      if [ ${#zfs_dataset_snapshots[@]} -le "$keep" ]; then
+        log_verbose "$domain: No snapshots to prune (total: ${#zfs_dataset_snapshots[@]}, keep: $keep)."
+      fi
+      ;;
     *)
+      # Should not reach here due to prior validation
       error "$domain: Unknown action '$action'."
       ;;
   esac
@@ -381,19 +410,27 @@ function resume_all_domains () {
 # Performs pre-flight checks for all specified domains according to the action.
 function preflight_checks () {
   local action="$1" ; shift
-  local snapshot_name="$1" ; shift
+  local snapshot_name
+  if [ "$action" == "snapshot" ] || [ "$action" == "revert" ]; then
+    snapshot_name="$1" ; shift
+  fi
   local error=0
   local domains=( "$@" )
 
   for domain in "${domains[@]}"; do
     log_verbose "$domain: Performing domain pre-flight checks for $action..."
-    if ! domain_checks "$action" "$domain" "$snapshot_name"; then
+    local -a domain_checks_args=( "$action" "$domain" )
+    if [ "$action" == "snapshot" ] || [ "$action" == "revert" ]; then
+      domain_checks_args+=( "$snapshot_name" )
+    fi
+    if ! domain_checks "${domain_checks_args[@]}"; then
       error=1
     fi
   done
 
   return $error
 }
+
 
 # Removes the save file for the specified domain.
 function remove_save_file () {
@@ -510,18 +547,35 @@ function revert_snapshots () {
 # Lists snapshots for all specified domains.
 function list_snapshots () {
   local domains=( "$@" )
-  local zfs_datasets
-  local zfs_dataset
+  local domain
+  local snapshot
+
+  for domain in "${domains[@]}"; do
+    echo "Snapshots for domain '$domain':"
+    for snapshot in ${domain_params_cache["$domain/snapshots"]}; do
+      echo "  - $snapshot"
+    done
+  done
+}
+
+# Prunes old snapshots for all specified domains according to the retention policy.
+function prune_snapshots () {
+  local domains=( "$@" )
+  local dataset
+  local snapshots
   local domain
 
   for domain in "${domains[@]}"; do
-    zfs_datasets=( $(get_zfs_datasets_from_domain "$domain") )
-    if [ ${#zfs_datasets[@]} -ne 1 ]; then
-      error "$domain: Wrong number of ZFS datasets (${#zfs_datasets[@]}) found." ; return 1
+    snapshots=( ${domain_params_cache["$domain/snapshots"]} )
+    dataset="${domain_params_cache["$domain/dataset"]}"
+    if [ "${#snapshots[@]}" -le "$keep" ]; then
+      continue
     fi
-    zfs_dataset="${zfs_datasets[0]:-}"
-
-    echo "Snapshots for domain '$domain':"
-    get_zfs_snapshots_from_dataset "$zfs_dataset" | sed 's/^/  - /'
+    local first_to_delete_idx=$(( ${#snapshots[@]} - keep - 1 ))
+    local first_to_delete="${snapshots[$first_to_delete_idx]}"
+    if [ -z "$first_to_delete" ]; then
+      continue
+    fi
+    zfs destroy -r "${dataset}@%${first_to_delete}"
   done
 }

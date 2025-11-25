@@ -6,8 +6,8 @@ all: syntax-test lint unit-test e2e-test release
 
 syntax-test:
 	@echo "Running syntax tests..."
-	@/bin/bash -nv src/zvirt
-	@/bin/bash -nv src/lib/core.sh
+	@/bin/bash -nv src/bin/zvirt
+	@/bin/bash -nv src/lib/zvirt/core.sh
 
 prerequisites:
 	@echo "Installing prerequisites..."

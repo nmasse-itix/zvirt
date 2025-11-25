@@ -51,11 +51,12 @@ case "$action" in
     revert_snapshots || fatal "Failed to revert snapshots."
     ;;
   list)
-    if [ ${#domains[@]} -eq 0 ]; then
-      # Get all domains
-      mapfile -t domains < <(virsh list --all --name | grep -v '^$')
-    fi
+    preflight_checks "$action" "${domains[@]}" || fatal "Pre-flight checks failed."
     list_snapshots "${domains[@]}" || fatal "Failed to list snapshots."
+    ;;
+  prune)
+    preflight_checks "$action" "${domains[@]}" || fatal "Pre-flight checks failed."
+    prune_snapshots "${domains[@]}" || fatal "Failed to prune snapshots."
     ;;
   *)
     fatal "Unknown action '$action'."

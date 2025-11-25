@@ -5,7 +5,7 @@
 Zvirt takes snapshots of Libvirt domains using ZFS.
 It supports both crash-consistent and live snapshots.
 
-At the end, all components of a domain (Domain definition, TPM, NVRAM, VirtioFS, ZFS snapshots of the underlying storage volumes) are captured as a set of consistent ZFS snapshots.
+At the end, all components of a domain - Domain definition, TPM, NVRAM, VirtioFS, disks (either files on a ZFS dataset or raw zvols) - are captured as a set of consistent ZFS snapshots.
 
 ## Features
 
