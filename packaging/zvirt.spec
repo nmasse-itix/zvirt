@@ -1,6 +1,10 @@
 Name:           zvirt
 Version:        0.0.4
+%if %{defined dist}
 Release:        1%{?dist}
+%else
+Release:        1
+%endif
 Summary:        Libvirt ZFS snapshots utility
 
 License:        MIT
@@ -12,6 +16,7 @@ BuildArch:      noarch
 Requires:       bash
 Requires:       libvirt
 Requires:       zfs
+BuildRequires:  make
 
 %description
 Zvirt takes snapshots of Libvirt domains using ZFS.

@@ -53,7 +53,7 @@ srpm: prerequisites
 	@git ls-files | sed 's|^|./|' > build/filelist.txt
 	@mkdir -p build/zvirt-$(VERSION)/SOURCES
 	@tar --verbatim-files-from --files-from=build/filelist.txt -cvzf build/zvirt-$(VERSION)/SOURCES/zvirt-$(VERSION).tar.gz --transform "s|^./|zvirt-$(VERSION)/|"
-	@rpmbuild --define "_topdir $$(pwd)/build/zvirt-$(VERSION)" -bs packaging/zvirt.spec
+	@rpmbuild --define "_topdir $$(pwd)/build/zvirt-$(VERSION)" --define "dist %{nil}" -bs packaging/zvirt.spec
 
 rpm: prerequisites srpm
 	@echo "Creating RPM..."
