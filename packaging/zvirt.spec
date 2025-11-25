@@ -1,5 +1,5 @@
 Name:           zvirt
-Version:        %{version}
+Version:        0.0.3
 Release:        1%{?dist}
 Summary:        Libvirt ZFS snapshots utility
 

@@ -1,5 +1,5 @@
 PREFIX ?= /usr/local
-.PHONY: all test unit-test syntax-test e2e-test lint clean prerequisites install uninstall release tarball install-tarball srpm rpm copr-build copr-whoami
+.PHONY: all test unit-test syntax-test e2e-test lint clean prerequisites install uninstall release tarball install-tarball srpm rpm copr-build copr-whoami git-tag
 VERSION := $(shell git describe --tags --abbrev=0)
 
 all: syntax-test lint unit-test e2e-test release
@@ -17,6 +17,7 @@ prerequisites:
 	@/bin/bash -Eeuo pipefail -c 'if ! gh --version &>/dev/null; then dnf install -y gh; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! rpmbuild --version &>/dev/null; then dnf install -y rpm-build; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! copr-cli --version &>/dev/null; then dnf install -y copr-cli; fi'
+	@/bin/bash -Eeuo pipefail -c 'if ! git --version &>/dev/null; then dnf install -y git; fi'
 
 unit-test: prerequisites
 	@echo "Running unit tests..."
@@ -66,9 +67,20 @@ copr-build: copr-whoami srpm
 	@echo "Building RPM in COPR..."
 	@copr-cli build --nowait nmasse-itix/zvirt build/zvirt-$(VERSION)/SRPMS/zvirt-$(VERSION)-*.src.rpm
 
-release: prerequisites tarball srpm rpm copr-build
-	@echo "Creating GitHub release..."
+git-tag: prerequisites
+	@if [ -n "$$(git status --porcelain)" ]; then echo "Git working directory is dirty. Please commit or stash changes before tagging."; exit 1; fi
+	@echo "Tagging Git repository..."
+	@read -p "Enter version to tag [current: $(VERSION)]: " VERSION_TO_TAG; \
+	sed -i "s/^Version: .*/Version:        $${VERSION_TO_TAG}/" packaging/zvirt.spec; \
+	git add packaging/zvirt.spec; \
+	git commit -m "Bump version to $${VERSION_TO_TAG}"
+
+release: prerequisites git-tag tarball srpm rpm copr-build
+	@echo "Creating GitHub release $(VERSION)..."
 	@gh release create $(VERSION) build/zvirt-$(VERSION).tar.gz build/zvirt-$(VERSION)/SRPMS/zvirt-$(VERSION)-*.rpm --draft --title "v$(VERSION)" --notes "Release v$(VERSION) of zvirt. RPMs are in COPR [nmasse-itix/zvirt](https://copr.fedorainfracloud.org/coprs/nmasse-itix/zvirt/)."
+	@git push origin $$(git rev-parse --abbrev-ref HEAD)
+	@git tag -a "$(VERSION)" -m "Release v$(VERSION)"
+	@git push origin "$(VERSION)"
 
 clean:
 	@echo "Cleaning up..."
