@@ -1,5 +1,5 @@
 Name:           zvirt
-Version:        0.0.4
+Version:        0.0.5
 %if %{defined dist}
 Release:        1%{?dist}
 %else
