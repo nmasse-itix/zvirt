@@ -1,5 +1,5 @@
 PREFIX ?= /usr/local
-.PHONY: all test unit-test syntax-test e2e-test lint clean prerequisites install uninstall release tarball install-tarball srpm rpm
+.PHONY: all test unit-test syntax-test e2e-test lint clean prerequisites install uninstall release tarball install-tarball srpm rpm copr-build copr-whoami
 VERSION := $(shell git describe --tags --abbrev=0)
 
 all: syntax-test lint unit-test e2e-test release
@@ -16,6 +16,7 @@ prerequisites:
 	@/bin/bash -Eeuo pipefail -c 'if ! shellcheck --version &>/dev/null; then dnf install -y shellcheck; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! gh --version &>/dev/null; then dnf install -y gh; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! rpmbuild --version &>/dev/null; then dnf install -y rpm-build; fi'
+	@/bin/bash -Eeuo pipefail -c 'if ! copr-cli --version &>/dev/null; then dnf install -y copr-cli; fi'
 
 unit-test: prerequisites
 	@echo "Running unit tests..."
@@ -56,9 +57,18 @@ rpm: prerequisites
 	@echo "Creating RPM..."
 	@rpmbuild --define "_topdir $$(pwd)/build/zvirt-$(VERSION)" --define "version $(VERSION)" -bb packaging/zvirt.spec
 
-release: prerequisites tarball srpm rpm
+# https://copr.fedorainfracloud.org/api/
+copr-whoami: prerequisites
+	@echo "Checking COPR identity..."
+	@copr-cli whoami
+
+copr-build: copr-whoami srpm
+	@echo "Building RPM in COPR..."
+	@copr-cli build --nowait nmasse-itix/zvirt build/zvirt-$(VERSION)/SRPMS/zvirt-$(VERSION)-*.src.rpm
+
+release: prerequisites tarball srpm rpm copr-build
 	@echo "Creating GitHub release..."
-	@gh release create $(VERSION) build/zvirt-$(VERSION).tar.gz build/zvirt-$(VERSION)/RPMS/noarch/zvirt-$(VERSION)-*.rpm build/zvirt-$(VERSION)/SRPMS/zvirt-$(VERSION)-*.rpm --draft --title "v$(VERSION)" --notes "Release v$(VERSION) of zvirt."
+	@gh release create $(VERSION) build/zvirt-$(VERSION).tar.gz build/zvirt-$(VERSION)/SRPMS/zvirt-$(VERSION)-*.rpm --draft --title "v$(VERSION)" --notes "Release v$(VERSION) of zvirt. RPMs are in COPR [nmasse-itix/zvirt](https://copr.fedorainfracloud.org/coprs/nmasse-itix/zvirt/)."
 
 clean:
 	@echo "Cleaning up..."
