@@ -47,16 +47,17 @@ install-tarball: tarball
 	@echo "Installing zvirt from release tarball..."
 	@tar -xvzf build/zvirt-$(VERSION).tar.gz --strip-components=1 -C $(PREFIX)
 
-srpm: prerequisites tarball
+srpm: prerequisites
 	@echo "Creating SRPM..."
+	@sed -i "s/^Version: .*/Version:        $(VERSION)/" packaging/zvirt.spec
 	@git ls-files | sed 's|^|./|' > build/filelist.txt
 	@mkdir -p build/zvirt-$(VERSION)/SOURCES
 	@tar --verbatim-files-from --files-from=build/filelist.txt -cvzf build/zvirt-$(VERSION)/SOURCES/zvirt-$(VERSION).tar.gz --transform "s|^./|zvirt-$(VERSION)/|"
-	@rpmbuild --define "_topdir $$(pwd)/build/zvirt-$(VERSION)" --define "version $(VERSION)" -ba packaging/zvirt.spec
+	@rpmbuild --define "_topdir $$(pwd)/build/zvirt-$(VERSION)" -bs packaging/zvirt.spec
 
-rpm: prerequisites
+rpm: prerequisites srpm
 	@echo "Creating RPM..."
-	@rpmbuild --define "_topdir $$(pwd)/build/zvirt-$(VERSION)" --define "version $(VERSION)" -bb packaging/zvirt.spec
+	@rpmbuild --define "_topdir $$(pwd)/build/zvirt-$(VERSION)" -bb packaging/zvirt.spec
 
 # https://copr.fedorainfracloud.org/api/
 copr-whoami: prerequisites
@@ -70,17 +71,19 @@ copr-build: copr-whoami srpm
 git-tag: prerequisites
 	@if [ -n "$$(git status --porcelain)" ]; then echo "Git working directory is dirty. Please commit or stash changes before tagging."; exit 1; fi
 	@echo "Tagging Git repository..."
-	@read -p "Enter version to tag [current: $(VERSION)]: " VERSION_TO_TAG; \
-	sed -i "s/^Version: .*/Version:        $${VERSION_TO_TAG}/" packaging/zvirt.spec; \
+	@read -p "Enter version to tag [current: $(VERSION)]: " NEW_VERSION; \
+	sed -i "s/^Version: .*/Version:        $${NEW_VERSION}/" packaging/zvirt.spec; \
 	git add packaging/zvirt.spec; \
-	git commit -m "Bump version to $${VERSION_TO_TAG}"
+	git commit -m "Bump version to $${NEW_VERSION}" ; \
+	git tag -a "$${NEW_VERSION}" -m "Release v$${NEW_VERSION} of zvirt." ; \
+	$(MAKE) -C . VERSION=$${NEW_VERSION} release
 
-release: prerequisites git-tag tarball srpm rpm copr-build
+release: prerequisites tarball srpm rpm copr-build
+	@echo "Pushing changes for version $(VERSION) to Git repository..."
+	@git push origin $$(git rev-parse --abbrev-ref HEAD)
+	@git push origin "$(VERSION)"
 	@echo "Creating GitHub release $(VERSION)..."
 	@gh release create $(VERSION) build/zvirt-$(VERSION).tar.gz build/zvirt-$(VERSION)/SRPMS/zvirt-$(VERSION)-*.rpm --draft --title "v$(VERSION)" --notes "Release v$(VERSION) of zvirt. RPMs are in COPR [nmasse-itix/zvirt](https://copr.fedorainfracloud.org/coprs/nmasse-itix/zvirt/)."
-	@git push origin $$(git rev-parse --abbrev-ref HEAD)
-	@git tag -a "$(VERSION)" -m "Release v$(VERSION)"
-	@git push origin "$(VERSION)"
 
 clean:
 	@echo "Cleaning up..."
