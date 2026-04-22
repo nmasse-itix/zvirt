@@ -18,7 +18,7 @@ prerequisites:
 	@/bin/bash -Eeuo pipefail -c 'if ! rpmbuild --version &>/dev/null; then dnf install -y rpm-build; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! copr-cli --version &>/dev/null; then dnf install -y copr-cli; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! git --version &>/dev/null; then dnf install -y git; fi'
-	@/bin/bash -Eeuo pipefail -c 'if ! zfs-autobackup --version &>/dev/null; then pip install --upgrade zfs-autobackup; fi'
+	@/bin/bash -Eeuo pipefail -c 'if [ -z "$$(which zfs-autobackup)" ]; then pip install --upgrade zfs-autobackup; fi'
 
 install:
 	@echo "Installing zvirt..."
@@ -46,6 +46,9 @@ srpm: prerequisites
 	@git ls-files | sed 's|^|./|' > build/filelist.txt
 	@mkdir -p build/zvirt-$(VERSION)/SOURCES
 	@tar --verbatim-files-from --files-from=build/filelist.txt -cvzf build/zvirt-$(VERSION)/SOURCES/zvirt-$(VERSION).tar.gz --transform "s|^./|zvirt-$(VERSION)/|"
+	@pip download --no-deps zfs-autobackup -d build/zvirt-$(VERSION)/SOURCES/ --quiet
+	@ZFS_AB_WHL=$$(ls build/zvirt-$(VERSION)/SOURCES/zfs_autobackup-*.whl | head -1 | xargs basename); \
+	sed -i "s|^Source1:.*|Source1:        $${ZFS_AB_WHL}|" packaging/zvirt.spec
 	@rpmbuild --define "_topdir $$(pwd)/build/zvirt-$(VERSION)" --define "dist %{nil}" -bs packaging/zvirt.spec
 
 rpm: prerequisites srpm
