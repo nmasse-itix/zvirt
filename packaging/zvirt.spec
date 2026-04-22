@@ -17,6 +17,7 @@ Requires:       bash
 Requires:       libvirt
 Requires:       zfs
 BuildRequires:  make
+BuildRequires:  python3-pip
 
 %description
 Zvirt takes snapshots of Libvirt domains using ZFS.
@@ -26,6 +27,8 @@ At the end, all components of a domain (Domain definition, TPM, NVRAM,
 VirtioFS, ZFS snapshots of the underlying storage volumes) are captured 
 as a set of consistent ZFS snapshots.
 
+It is implemented as a set of hooks for the zfs_autobackup script.
+
 %prep
 %setup -q
 
@@ -34,11 +37,11 @@ as a set of consistent ZFS snapshots.
 
 %install
 make PREFIX=%{buildroot}%{_prefix} install
+pip install --target %{buildroot}%{python3_sitelib} foo-package
 
 %files
-%{_bindir}/zvirt
-%{_prefix}/lib/zvirt/core.sh
-%dir %{_prefix}/lib/zvirt
+%{_bindir}/libvirt-hook
+%{_bindir}/snapshot-libvirt-domains
 
 %changelog
 * Mon Nov 24 2025 Nicolas Massé <nicolas.masse@itix.fr> - 0.0.1-1

@@ -1,0 +1,83 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+verbose=0
+live=0
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+
+function show_help () {
+  cat << EOF
+Snapshots all libvirt domains on the host. It uses the zfs-autobackup tool
+to create snapshots of the domains' using the ZFS native tools.
+
+Usage: ${0##*/} [-l] [-h] [-v]
+
+Options:
+  -h             display this help and exit
+  -v             verbose mode
+  -l             live snapshot mode (default is crash-consistent)
+EOF
+}
+
+function run () {
+  if [ "$verbose" -eq 1 ]; then
+    echo "$*" >&2
+  fi
+  "$@"
+}
+
+OPTIND=1 # Reset in case getopts has been used previously in the shell.
+
+while getopts "h?lv" opt; do
+  case "$opt" in
+    h|\?)
+    show_help
+    exit 0
+    ;;
+    v)  verbose=1
+    ;;
+    l)  live=1
+    ;;
+    *)  show_help >&2
+    exit 1
+    ;;
+  esac
+done
+
+shift $((OPTIND-1))
+
+[ "${1:-}" = "--" ] && shift
+
+if [ $# -ne 0 ]; then
+  echo "Error: Unexpected number of positional arguments: $#" >&2
+  show_help >&2
+  exit 1
+fi
+
+declare -a zfs_autobackup_args=()
+if [ "$verbose" -eq 1 ]; then
+  zfs_autobackup_args+=("-v")
+fi
+zfs_autobackup_args+=("--no-send" "--no-thinning")
+zfs_autobackup_args+=("--snapshot-format" "libvirt-%Y-%m-%d-%H:%M:%S")
+
+for domain in $(virsh list --name); do
+  if [ "$(zfs get -t filesystem,volume autobackup:libvirt-${domain} -o value -H -s local)" == "" ]; then
+    echo "Skipping domain ${domain} because it is not configured for autobackup" >&2
+    continue
+  fi
+  
+  declare -a zfs_autobackup_hooks_args=()
+  if [ "$live" -eq 1 ]; then
+    zfs_autobackup_hooks_args+=("-l" "-r" "/var/lib/libvirt/images/${domain}")
+  fi
+  if [ "$verbose" -eq 1 ]; then
+    zfs_autobackup_hooks_args+=("-v")
+  fi
+
+  run zfs-autobackup "${zfs_autobackup_args[@]}" \
+                     --pre-snapshot-cmd  "$SCRIPT_DIR/libvirt-hook ${zfs_autobackup_hooks_args[*]} -k pre $domain" \
+                     --post-snapshot-cmd "$SCRIPT_DIR/libvirt-hook ${zfs_autobackup_hooks_args[*]} -k post $domain" \
+                     "libvirt-${domain}"
+done

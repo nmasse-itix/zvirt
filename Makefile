@@ -1,13 +1,13 @@
 PREFIX ?= /usr/local
-.PHONY: all test unit-test syntax-test e2e-test lint clean prerequisites install uninstall release tarball install-tarball srpm rpm copr-build copr-whoami git-tag
+.PHONY: all test syntax-test lint clean prerequisites install uninstall release tarball install-tarball srpm rpm copr-build copr-whoami git-tag
 VERSION := $(shell git describe --tags --abbrev=0)
 
-all: syntax-test lint unit-test e2e-test release
+all: syntax-test lint release
 
 syntax-test:
 	@echo "Running syntax tests..."
-	@/bin/bash -nv src/bin/zvirt
-	@/bin/bash -nv src/lib/zvirt/core.sh
+	@/bin/bash -nv src/bin/libvirt-hook
+	@/bin/bash -nv src/bin/snapshot-libvirt-domains
 
 prerequisites:
 	@echo "Installing prerequisites..."
@@ -18,25 +18,18 @@ prerequisites:
 	@/bin/bash -Eeuo pipefail -c 'if ! rpmbuild --version &>/dev/null; then dnf install -y rpm-build; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! copr-cli --version &>/dev/null; then dnf install -y copr-cli; fi'
 	@/bin/bash -Eeuo pipefail -c 'if ! git --version &>/dev/null; then dnf install -y git; fi'
-
-unit-test: prerequisites
-	@echo "Running unit tests..."
-	@LANG=C LC_ALL=C BATS_LIB_PATH=$(PWD)/test/test_helper bats test/unit
-
-e2e-test: prerequisites
-	@echo "Running end-to-end tests..."
-	@LANG=C LC_ALL=C BATS_LIB_PATH=$(PWD)/test/test_helper bats test/e2e
+	@/bin/bash -Eeuo pipefail -c 'if ! zfs-autobackup --version &>/dev/null; then pip install --upgrade zfs-autobackup; fi'
 
 install:
 	@echo "Installing zvirt..."
-	@install -d $(PREFIX)/lib/zvirt $(PREFIX)/bin
-	@install -m 755 src/bin/zvirt $(PREFIX)/bin/zvirt
-	@install -m 644 src/lib/zvirt/core.sh $(PREFIX)/lib/zvirt/core.sh
+	@install -d $(PREFIX)/bin
+	@install -m 755 src/bin/libvirt-hook $(PREFIX)/bin/libvirt-hook
+	@install -m 755 src/bin/snapshot-libvirt-domains $(PREFIX)/bin/snapshot-libvirt-domains
 
 uninstall:
 	@echo "Uninstalling zvirt..."
-	@rm -f $(PREFIX)/bin/zvirt
-	@rm -rf $(PREFIX)/lib/zvirt
+	@rm -f $(PREFIX)/bin/libvirt-hook
+	@rm -f $(PREFIX)/bin/snapshot-libvirt-domains
 
 tarball:
 	@echo "Creating release tarball..."
@@ -91,4 +84,4 @@ clean:
 
 lint: prerequisites
 	@echo "Linting..."
-	@cd src && shellcheck --severity=error bin/zvirt lib/zvirt/*.sh
+	@cd src && shellcheck --severity=error bin/*.sh

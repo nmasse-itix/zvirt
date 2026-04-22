@@ -1,0 +1,157 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+hook=""
+verbose=0
+live=0
+domain=""
+domain_dir=""
+
+function show_help () {
+  cat << EOF
+pre/post hook for zfs-autobackup to manage snapshots of KVM/QEMU virtual machines using virsh.
+
+Usage: ${0##*/} -k {pre|post} [-h] [-l] [-v] domain
+
+Options:
+  -h             display this help and exit
+  -v             verbose mode
+  -l             live snapshot mode (default is crash-consistent)
+  -r dir         specify the root directory of the domain's storage
+  -k {pre|post}  specify the hook type (pre or post)
+
+Examples:
+  pre-hook for a crash-consistent snapshot of domain 'vm1':
+    ${0##*/} -k pre vm1
+
+  post-hook for a crash-consistent snapshot of domain 'vm1':
+    ${0##*/} -k post vm1
+
+  pre-hook for a live snapshot of domain 'vm1':
+    ${0##*/} -k pre -l -r /var/lib/libvirt/images/vm1 vm1
+
+  post-hook for a live snapshot of domain 'vm1':
+    ${0##*/} -k post -l -r /var/lib/libvirt/images/vm1 vm1
+EOF
+}
+
+function run () {
+  if [ "$verbose" -eq 1 ]; then
+    echo "$*" >&2
+  fi
+  "$@"
+}
+
+OPTIND=1 # Reset in case getopts has been used previously in the shell.
+
+while getopts "h?lvk:r:" opt; do
+  case "$opt" in
+    h|\?)
+    show_help
+    exit 0
+    ;;
+    v)  verbose=1
+    ;;
+    l)  live=1
+    ;;
+    k)  hook="$OPTARG"
+    ;;
+    r)  domain_dir="$OPTARG"
+    ;;
+    *)  show_help >&2
+    exit 1
+    ;;
+  esac
+done
+
+shift $((OPTIND-1))
+
+[ "${1:-}" = "--" ] && shift
+
+if [ $# -ne 1 ]; then
+  echo "Error: Unexpected number of positional arguments: $#" >&2
+  show_help >&2
+  exit 1
+fi
+
+domain="$1"
+
+if [ "$hook" == "" ]; then
+  echo "Error: Hook type not specified. Use -k to specify 'pre' or 'post'." >&2
+  show_help >&2
+  exit 1
+fi
+
+if ! virsh dominfo "$domain" &> /dev/null; then
+  echo "Error: Domain '$domain' does not exist." >&2
+  exit 1
+fi
+
+state=$(virsh domstate "$domain")
+if [ "$live" -eq 1 ]; then
+  if [ "$hook" == "pre" ] && [ "$state" != "running" ]; then
+    echo "Error: Domain '$domain' is not running. Pre-hook can only work on running domains." >&2
+    exit 1
+  fi
+
+  if [ "$hook" == "post" ] && [ "$state" != "shut off" ]; then
+    echo "Error: Domain '$domain' is not shut off. Post-hook can only work on shut off domains." >&2
+    exit 1
+  fi
+
+  if [ "$domain_dir" == "" ]; then
+    echo "Error: Domain storage directory must be specified for live snapshots using the -r option." >&2
+    show_help >&2
+    exit 1
+  fi
+
+  if [ ! -d "$domain_dir" ]; then
+    echo "Error: Specified domain directory '$domain_dir' does not exist." >&2
+    exit 1
+  fi
+
+  if [ "$hook" == "pre" ] && [ -f "$domain_dir/domain.save" ]; then
+    echo "Error: Specified domain directory '$domain_dir' already contains a save file." >&2
+    exit 1
+  fi
+
+  if [ "$hook" == "post" ] && [ ! -f "$domain_dir/domain.save" ]; then
+    echo "Error: Specified domain directory '$domain_dir' does not contain a save file." >&2
+    exit 1
+  fi
+fi
+
+case "$hook" in
+  pre)
+    if [ "$live" -eq 1 ]; then
+      virsh_args=()
+      if [ "$verbose" -eq 1 ]; then
+        virsh_args+=(--verbose)
+      fi
+      run virsh save "$domain" "${domain_dir}/domain.save" "${virsh_args[@]}" --running --image-format raw
+    else
+      if [ "$state" == "running" ]; then
+        run virsh domfsfreeze "$domain"
+      fi
+    fi
+    ;;
+
+  post)
+    if [ "$live" -eq 1 ]; then
+      run virsh restore "${domain_dir}/domain.save" --running
+      run rm -f "${domain_dir}/domain.save"
+    else
+      if [ "$state" == "running" ]; then
+        run virsh domfsthaw "$domain"
+      fi
+    fi
+    ;;
+  *)
+    echo "Error: Invalid hook type specified: '$hook'. Must be 'pre' or 'post'." >&2
+    show_help >&2
+    exit 1
+    ;;
+esac
+
+exit 0
