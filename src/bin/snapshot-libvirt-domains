@@ -62,7 +62,13 @@ fi
 zfs_autobackup_args+=("--no-send" "--no-thinning")
 zfs_autobackup_args+=("--snapshot-format" "libvirt-%Y-%m-%d-%H:%M:%S")
 
-for domain in $(virsh list --name); do
+declare -a virsh_args=()
+if [ "$live" -eq 1 ]; then
+  virsh_args+=("--state-running")
+else
+  virsh_args+=("--all")
+fi
+for domain in $(virsh list --name "${virsh_args[@]}"); do
   if [ "$(zfs get -t filesystem,volume autobackup:libvirt-${domain} -o value -H -s local)" == "" ]; then
     echo "Skipping domain ${domain} because it is not configured for autobackup" >&2
     continue
