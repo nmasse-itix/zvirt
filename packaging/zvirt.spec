@@ -1,6 +1,6 @@
 %global __brp_python_bytecompile %{nil}
 Name:           zvirt
-Version:        0.0.6
+Version:        0.0.7
 %if %{defined dist}
 Release:        1%{?dist}
 %else
