@@ -4,7 +4,22 @@ set -Eeuo pipefail
 
 verbose=0
 live=0
+print_snapshot_format=0
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+SNAPSHOT_FORMAT_FILE="$(readlink -f "$SCRIPT_DIR/../share/zvirt/snapshot-format")"
+
+# The snapshot name format lives in a single sourceable file so that tools
+# pruning zvirt's snapshots can read it instead of copying it. See that file.
+if [ ! -r "$SNAPSHOT_FORMAT_FILE" ]; then
+  echo "Error: cannot read the snapshot format file: $SNAPSHOT_FORMAT_FILE" >&2
+  exit 1
+fi
+# shellcheck source=../share/zvirt/snapshot-format
+source "$SNAPSHOT_FORMAT_FILE"
+if [ -z "${ZVIRT_SNAPSHOT_FORMAT:-}" ]; then
+  echo "Error: ZVIRT_SNAPSHOT_FORMAT is not set in $SNAPSHOT_FORMAT_FILE" >&2
+  exit 1
+fi
 
 function show_help () {
   cat << EOF
@@ -12,11 +27,27 @@ Snapshots all libvirt domains on the host. It uses the zfs-autobackup tool
 to create snapshots of the domains' using the ZFS native tools.
 
 Usage: ${0##*/} [-l] [-h] [-v]
+       ${0##*/} --print-snapshot-format
 
 Options:
   -h             display this help and exit
   -v             verbose mode
   -l             live snapshot mode (default is crash-consistent)
+
+  --print-snapshot-format
+                 print the snapshot name format used by zvirt and exit
+
+Snapshots are created with --no-thinning: retention is left to a separate
+zfs-autobackup run in snapshot-only mode, which must be given the very same
+snapshot format, otherwise it matches no snapshot, deletes nothing and still
+exits successfully:
+
+  ${0##*/} --print-snapshot-format
+  zfs-autobackup --no-snapshot --keep-source 1w1d,1m1w,1y1m \\
+                 --snapshot-format "\$(${0##*/} --print-snapshot-format)" libvirt
+
+The format can also be sourced from ${SNAPSHOT_FORMAT_FILE}
+as \$ZVIRT_SNAPSHOT_FORMAT.
 EOF
 }
 
@@ -29,7 +60,7 @@ function run () {
 
 OPTIND=1 # Reset in case getopts has been used previously in the shell.
 
-while getopts "h?lv" opt; do
+while getopts "h?lv-:" opt; do
   case "$opt" in
     h|\?)
     show_help
@@ -38,6 +69,18 @@ while getopts "h?lv" opt; do
     v)  verbose=1
     ;;
     l)  live=1
+    ;;
+    -)  case "$OPTARG" in
+          help) show_help
+          exit 0
+          ;;
+          print-snapshot-format) print_snapshot_format=1
+          ;;
+          *)  echo "Error: Unknown option: --$OPTARG" >&2
+          show_help >&2
+          exit 1
+          ;;
+        esac
     ;;
     *)  show_help >&2
     exit 1
@@ -55,12 +98,17 @@ if [ $# -ne 0 ]; then
   exit 1
 fi
 
+if [ "$print_snapshot_format" -eq 1 ]; then
+  echo "$ZVIRT_SNAPSHOT_FORMAT"
+  exit 0
+fi
+
 declare -a zfs_autobackup_args=()
 if [ "$verbose" -eq 1 ]; then
   zfs_autobackup_args+=("-v")
 fi
 zfs_autobackup_args+=("--no-send" "--no-thinning")
-zfs_autobackup_args+=("--snapshot-format" "libvirt-%Y-%m-%d-%H:%M:%S")
+zfs_autobackup_args+=("--snapshot-format" "$ZVIRT_SNAPSHOT_FORMAT")
 
 declare -a virsh_args=()
 if [ "$live" -eq 1 ]; then

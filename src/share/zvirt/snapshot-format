@@ -1,0 +1,32 @@
+# shellcheck shell=bash
+# Snapshot name format used by zvirt.
+#
+# This file is the single source of truth: snapshot-libvirt-domains sources it
+# instead of hardcoding the format, so any tool that prunes zvirt's snapshots
+# can source it too and cannot drift from what was actually written.
+#
+# Consumers:
+#
+#   . /usr/share/zvirt/snapshot-format
+#   zfs-autobackup --no-snapshot --keep-source 1w1d,1m1w,1y1m \
+#                  --snapshot-format "$ZVIRT_SNAPSHOT_FORMAT" libvirt
+#
+# or, without sourcing:
+#
+#   snapshot-libvirt-domains --print-snapshot-format
+#
+# A mismatched format is silently harmless-looking: zfs-autobackup only thins
+# snapshots whose name parses against the format it was given, so a wrong
+# format destroys nothing and still exits 0.
+#
+# Note: the format carries no '{}' placeholder on purpose (zfs-autobackup's
+# default is '{}-%Y%m%d%H%M%S', where '{}' expands to the backup name). All
+# domains therefore share a single snapshot name pattern, which is what allows
+# one prune run over the shared 'autobackup:libvirt' property to cover every
+# domain at once, instead of one invocation per domain. Do not add '{}' here.
+#
+# Note for systemd units: '%Y', '%m', '%d', '%H', '%M' and '%S' are systemd
+# specifiers and must be doubled in ExecStart= ('%%Y', '%%m', ...). Sourcing
+# this file from a wrapper script avoids the problem entirely.
+
+ZVIRT_SNAPSHOT_FORMAT='libvirt-%Y-%m-%d-%H:%M:%S'

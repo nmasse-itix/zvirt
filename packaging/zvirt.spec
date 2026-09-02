@@ -47,6 +47,8 @@ pip install --root %{buildroot} --prefix %{_prefix} --no-compile --no-deps --no-
 %files
 %{_bindir}/libvirt-hook
 %{_bindir}/snapshot-libvirt-domains
+%dir %{_datadir}/zvirt/
+%{_datadir}/zvirt/snapshot-format
 %{_bindir}/zfs-autobackup
 %{_bindir}/zfs-autoverify
 %{_bindir}/zfs-check
@@ -54,6 +56,10 @@ pip install --root %{buildroot} --prefix %{_prefix} --no-compile --no-deps --no-
 %{python3_sitelib}/zfs_autobackup-*.dist-info/
 
 %changelog
+* Wed Sep 02 2026 Nicolas Massé <nicolas.masse@itix.fr> - 0.0.7-1
+- Make the snapshot name format queryable (--print-snapshot-format)
+- Ship /usr/share/zvirt/snapshot-format as the single source of truth
+
 * Wed Apr 22 2026 Nicolas Massé <nicolas.masse@itix.fr> - 0.0.6-1
 - Switch to zfs-autobackup + hooks
 

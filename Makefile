@@ -25,11 +25,15 @@ install:
 	@install -d $(PREFIX)/bin
 	@install -m 755 src/bin/libvirt-hook $(PREFIX)/bin/libvirt-hook
 	@install -m 755 src/bin/snapshot-libvirt-domains $(PREFIX)/bin/snapshot-libvirt-domains
+	@install -d $(PREFIX)/share/zvirt
+	@install -m 644 src/share/zvirt/snapshot-format $(PREFIX)/share/zvirt/snapshot-format
 
 uninstall:
 	@echo "Uninstalling zvirt..."
 	@rm -f $(PREFIX)/bin/libvirt-hook
 	@rm -f $(PREFIX)/bin/snapshot-libvirt-domains
+	@rm -f $(PREFIX)/share/zvirt/snapshot-format
+	@rmdir --ignore-fail-on-non-empty $(PREFIX)/share/zvirt
 
 tarball:
 	@echo "Creating release tarball..."
@@ -87,4 +91,4 @@ clean:
 
 lint: prerequisites
 	@echo "Linting..."
-	@cd src && shellcheck --severity=error bin/*.sh
+	@cd src && shellcheck --severity=error bin/*
