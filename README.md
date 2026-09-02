@@ -13,6 +13,37 @@ At the end, all components of a domain - Domain definition, TPM, NVRAM, VirtioFS
 - Support both crash-consistent and live snapshots.
 - Support batch mode (pause all domains, take snapshots, then resume all domains)
 
+## Selecting the domains to snapshot
+
+`snapshot-libvirt-domains` iterates over the libvirt domains and hands each one to `zfs-autobackup`
+under the backup name `libvirt-<domain>`, that is, the ZFS property `autobackup:libvirt-<domain>`.
+Which datasets that property selects is `zfs-autobackup`'s decision, not zvirt's: it looks the
+property up on every dataset, resolves inheritance, and tests its **value**:
+
+| Value    | Selected                                         |
+| -------- | ------------------------------------------------ |
+| `true`   | yes, on the dataset and everything inheriting it  |
+| `false`  | no, explicitly excluded                           |
+| `child`  | only the datasets that *inherit* it, not this one |
+| `parent` | only this dataset, not the ones inheriting it     |
+
+Inherited properties count, so the whole fleet can be configured on the parent dataset of all the
+domains:
+
+```console
+$ zfs set autobackup:libvirt-quay=true data/domains/quay   # this domain and its children
+$ zfs set autobackup:libvirt=true data/domains             # the shared property, for pruning
+```
+
+A domain that carries the property nowhere is skipped with a message on stderr and the run carries
+on with the next one, exiting 0 — configuring only some domains is a legitimate setup.
+
+> [!WARNING]
+> The property selects **datasets**, not domains, and zvirt does not check that the selection
+> actually covers a domain's storage. Set it on the domain's root dataset — set on a child only, the
+> run reports success while the disks above it are never snapshotted. `zfs-autobackup --test
+> --no-send --no-thinning libvirt-<domain>` prints the datasets it would select.
+
 ## Snapshot retention
 
 `snapshot-libvirt-domains` runs `zfs-autobackup` with `--no-thinning`: it only creates snapshots and

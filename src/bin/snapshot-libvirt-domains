@@ -58,6 +58,18 @@ function run () {
   "$@"
 }
 
+# Same as run(), but keeps the command's stderr in the given file instead of
+# letting it through: the caller needs to read it before deciding what it means.
+function run_capturing_stderr () {
+  local stderr_file="$1"
+  shift
+
+  if [ "$verbose" -eq 1 ]; then
+    echo "$*" >&2
+  fi
+  "$@" 2>"$stderr_file"
+}
+
 OPTIND=1 # Reset in case getopts has been used previously in the shell.
 
 while getopts "h?lv-:" opt; do
@@ -116,12 +128,11 @@ if [ "$live" -eq 1 ]; then
 else
   virsh_args+=("--all")
 fi
+# zfs-autobackup's stderr is kept aside for the length of one domain, see below.
+stderr_file="$(mktemp)"
+trap 'rm -f "$stderr_file"' EXIT
+
 for domain in $(virsh list --name "${virsh_args[@]}"); do
-  if [ "$(zfs get -t filesystem,volume autobackup:libvirt-${domain} -o value -H -s local)" == "" ]; then
-    echo "Skipping domain ${domain} because it is not configured for autobackup" >&2
-    continue
-  fi
-  
   declare -a zfs_autobackup_hooks_args=()
   if [ "$live" -eq 1 ]; then
     zfs_autobackup_hooks_args+=("-l" "-r" "/var/lib/libvirt/images/${domain}")
@@ -130,8 +141,36 @@ for domain in $(virsh list --name "${virsh_args[@]}"); do
     zfs_autobackup_hooks_args+=("-v")
   fi
 
-  run zfs-autobackup "${zfs_autobackup_args[@]}" \
+  # Whether a domain is configured for autobackup is zfs-autobackup's question to
+  # answer, not ours: it looks the autobackup:libvirt-<domain> property up on
+  # every dataset, resolves inheritance and tests the *value* (true, false,
+  # child, parent). A 'zfs get -s local' guard here could only test the presence
+  # of a *local* property, pool-wide: it skipped every domain configured by
+  # inheritance from a parent dataset - the normal way to configure a fleet -
+  # and, having no dataset operand, let through any domain whose property
+  # happened to be set on some unrelated dataset.
+  #
+  # zfs-autobackup reports "nothing selected" as exit 255 with a distinctive
+  # message, so keep its stderr aside long enough to tell that case (skip this
+  # domain, carry on with the others) from a genuine failure (abort).
+  rc=0
+  run_capturing_stderr "$stderr_file" \
+      zfs-autobackup "${zfs_autobackup_args[@]}" \
                      --pre-snapshot-cmd  "$SCRIPT_DIR/libvirt-hook ${zfs_autobackup_hooks_args[*]} -k pre $domain" \
                      --post-snapshot-cmd "$SCRIPT_DIR/libvirt-hook ${zfs_autobackup_hooks_args[*]} -k post $domain" \
-                     "libvirt-${domain}"
+                     "libvirt-${domain}" || rc=$?
+
+  if [ "$rc" -ne 0 ] && grep -qF "No source filesystems selected" "$stderr_file"; then
+    # Not an error here: the domain simply carries no autobackup property.
+    # zfs-autobackup's own wording is swallowed on purpose, it reads as a
+    # failure while nothing failed.
+    echo "Skipping domain ${domain} because it is not configured for autobackup" >&2
+    continue
+  fi
+
+  cat "$stderr_file" >&2
+  if [ "$rc" -ne 0 ]; then
+    echo "Error: zfs-autobackup failed on domain ${domain} with exit code ${rc}" >&2
+    exit "$rc"
+  fi
 done

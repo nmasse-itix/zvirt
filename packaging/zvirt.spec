@@ -56,6 +56,10 @@ pip install --root %{buildroot} --prefix %{_prefix} --no-compile --no-deps --no-
 %{python3_sitelib}/zfs_autobackup-*.dist-info/
 
 %changelog
+* Wed Sep 02 2026 Nicolas Massé <nicolas.masse@itix.fr> - 0.0.8-1
+- Let zfs-autobackup decide which domains are configured, so that an inherited
+  autobackup:libvirt-<domain> property is honoured
+
 * Wed Sep 02 2026 Nicolas Massé <nicolas.masse@itix.fr> - 0.0.7-1
 - Make the snapshot name format queryable (--print-snapshot-format)
 - Ship /usr/share/zvirt/snapshot-format as the single source of truth
